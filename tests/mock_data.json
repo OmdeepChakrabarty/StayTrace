@@ -1,0 +1,187 @@
+{
+  "carriers": [
+    "usps",
+    "fedex",
+    "ups",
+    "dhl",
+    "amazon",
+    "ontrac",
+    "other"
+  ],
+  "raw_parcels": {
+    "usps_valid": {
+      "tracking_number": "9400 1000 0000 0000 0000 22",
+      "carrier": "USPS - United States Postal Service",
+      "status": "DELIVERED, IN/AT MAILBOX",
+      "sender": "SEATTLE WA 98101",
+      "recipient": "NEW YORK NY 10001",
+      "origin_country": "USA",
+      "destination_country": "US",
+      "eta": "Aug 25, 2026 6:00 pm",
+      "weight": "2.5 lbs",
+      "service_type": "Priority Mail 2-Day",
+      "events": [
+        {
+          "timestamp": "2026-08-20 08:30:00 -0400",
+          "status": "Delivered",
+          "description": "Delivered, in/at mailbox",
+          "location": "NEW YORK, NY 10001",
+          "code": "DLV"
+        },
+        {
+          "timestamp": "2026-08-20 05:45:00 -0400",
+          "status": "Out for Delivery",
+          "description": "Out for Delivery, Expected Delivery by 6:00pm",
+          "location": "NEW YORK, NY 10001",
+          "code": "OFD"
+        },
+        {
+          "timestamp": "2026-08-19 14:15:00 -0400",
+          "status": "Departed USPS Regional Facility",
+          "description": "Departed USPS Regional Facility",
+          "location": "JAMAICA NY INTERNATIONAL DISTRIBUTION CENTER",
+          "code": "DEP"
+        }
+      ]
+    },
+    "fedex_valid": {
+      "trackingNumber": "123456789012",
+      "carrierName": "FedEx Express",
+      "packageStatus": "In transit",
+      "shipperAddress": {
+        "city": "Memphis",
+        "state": "TN",
+        "postalCode": "38101",
+        "country": "US"
+      },
+      "recipientAddress": {
+        "city": "Austin",
+        "state": "TX",
+        "postalCode": "73301",
+        "country": "US"
+      },
+      "estimatedDeliveryDate": "2026-08-24T15:30:00Z",
+      "packageWeight": {
+        "value": 1.8,
+        "unit": "kg"
+      },
+      "service": "FedEx 2Day",
+      "scanEvents": [
+        {
+          "date": "2026-08-21T09:00:00Z",
+          "eventType": "in_transit",
+          "eventDescription": "In transit to destination facility",
+          "scanLocation": "MEMPHIS, TN",
+          "statusCode": "IT"
+        },
+        {
+          "date": "2026-08-20T22:00:00Z",
+          "eventType": "pre_transit",
+          "eventDescription": "Shipment information sent to FedEx",
+          "scanLocation": "MEMPHIS, TN",
+          "statusCode": "OC"
+        }
+      ]
+    },
+    "ups_valid": {
+      "tracking_number": "1Z9999999999999999",
+      "carrier": "UPS Ground",
+      "status": "Out for Delivery",
+      "origin": "Atlanta, GA 30301, US",
+      "destination": "Chicago, IL 60601, US",
+      "estimated_delivery": "2026-08-22T19:00:00Z",
+      "weight_kg": 5.4,
+      "service_level": "UPS Ground",
+      "checkpoints": [
+        {
+          "time": "2026-08-22T06:30:00Z",
+          "activity": "Out For Delivery Today",
+          "status": "out_for_delivery",
+          "location": "Chicago, IL, US"
+        },
+        {
+          "time": "2026-08-21T18:00:00Z",
+          "activity": "Arrived at Facility",
+          "status": "in_transit",
+          "location": "Hodgkins, IL, US"
+        }
+      ]
+    },
+    "dhl_valid": {
+      "id": "1234567890",
+      "carrier": "DHL Express",
+      "status": "customs_exception",
+      "sender_location": "Frankfurt, Germany",
+      "receiver_location": "Miami, FL, US",
+      "origin_country_code": "DE",
+      "destination_country_code": "US",
+      "expected_delivery": "2026-08-26T12:00:00Z",
+      "weight": "4.2 kg",
+      "events": [
+        {
+          "timestamp": "2026-08-21T11:00:00Z",
+          "status": "exception",
+          "description": "Customs clearance delay",
+          "location": "CINCINNATI HUB, OH - USA"
+        }
+      ]
+    },
+    "invalid_payload_missing_tracking": {
+      "carrier": "fedex",
+      "status": "in_transit"
+    },
+    "invalid_payload_empty": {}
+  },
+  "tracking_numbers": {
+    "usps": [
+      {"number": "9400100000000000000022", "valid": true},
+      {"number": "9205500000000000000012", "valid": true},
+      {"number": "9400 1000 0000 0000 0000 22", "valid": true},
+      {"number": "EA123456789US", "valid": true},
+      {"number": "INVALID_USPS_123", "valid": false}
+    ],
+    "fedex": [
+      {"number": "123456789012", "valid": true},
+      {"number": "1234 5678 9012 345", "valid": true},
+      {"number": "98765432109876543210", "valid": true},
+      {"number": "SHORT", "valid": false}
+    ],
+    "ups": [
+      {"number": "1Z9999999999999999", "valid": true},
+      {"number": "1Z A01 928 68 0000 1008", "valid": true},
+      {"number": "T1234567890", "valid": true},
+      {"number": "999999999", "valid": true},
+      {"number": "NOT_A_UPS_NUMBER", "valid": false}
+    ],
+    "dhl": [
+      {"number": "1234567890", "valid": true},
+      {"number": "JJD00999999999999999", "valid": true},
+      {"number": "123", "valid": false}
+    ],
+    "amazon": [
+      {"number": "TBA123456789000", "valid": true},
+      {"number": "TBC123456789000", "valid": true},
+      {"number": "TBM123456789000", "valid": true},
+      {"number": "INVALID", "valid": false}
+    ]
+  },
+  "carrier_aliases": {
+    "usps": ["usps", "USPS", "United States Postal Service", "u.s. postal service", "US Postal Service"],
+    "fedex": ["fedex", "FedEx", "FEDERAL EXPRESS", "FedEx Express", "FedEx Ground"],
+    "ups": ["ups", "UPS", "United Parcel Service", "UPS Ground", "UPS Express"],
+    "dhl": ["dhl", "DHL", "DHL Express", "dhl parcel", "DHL Global Forwarding"],
+    "amazon": ["amazon", "Amazon Logistics", "AMZN", "TBA", "Amazon"],
+    "ontrac": ["ontrac", "OnTrac", "On Trac"],
+    "other": ["unknown carrier", "Random Logistics", "Hermes"]
+  },
+  "status_mappings": {
+    "pre_transit": ["pre_transit", "Label Created", "Shipping Label Created", "Info Received", "Electronic info received", "Manifest Picked Up"],
+    "in_transit": ["in_transit", "In Transit", "En Route", "Departed Facility", "Arrived at Facility", "Processed through Facility"],
+    "out_for_delivery": ["out_for_delivery", "Out for Delivery", "With delivery courier", "Out for delivery today"],
+    "delivered": ["delivered", "Delivered", "DELIVERED, IN/AT MAILBOX", "Left at Front Door", "Signed by Recipient"],
+    "failed_attempt": ["failed_attempt", "Delivery Attempted", "Notice Left", "Receiver not present", "Delivery Failed"],
+    "exception": ["exception", "Customs clearance delay", "Delay", "Weather delay", "Address incorrect", "Delivery Exception"],
+    "returned": ["returned", "Returned to Sender", "Return to Origin", "Undeliverable as Addressed"],
+    "unknown": ["unknown", "status unavailable", "null", ""]
+  }
+}
