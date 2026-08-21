@@ -1,5 +1,5 @@
 """
-Periodic crawler / polling worker for StayTrace ParcelPulse.
+Periodic crawler / polling worker for StayTrace.
 Iterates over active (non-terminal) parcels, queries latest tracking from Bright Data,
 and resolves state updates in the database.
 """

@@ -1,5 +1,5 @@
 """
-Validation rules and schema verification for ParcelPulse scraper and tracking data.
+Validation rules and schema verification for StayTrace scraper and tracking data.
 Completely deterministic, pure logic, no I/O, no network calls.
 """
 

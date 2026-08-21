@@ -1,5 +1,5 @@
 """
-ParcelPulse / StayTrace Application API.
+StayTrace Application API.
 Thin HTTP routing layer delegating business logic to service and pipeline modules.
 """
 
@@ -77,7 +77,7 @@ class TrackingService:
 
         return {
             "status": "healthy" if db_status == "connected" else "degraded",
-            "service": "StayTrace ParcelPulse API",
+            "service": "StayTrace API",
             "database": db_status,
         }
 
@@ -205,7 +205,7 @@ class TrackingService:
 # =====================================================================
 
 class StayTraceAPIHandler(BaseHTTPRequestHandler):
-    """HTTP Request handler for StayTrace ParcelPulse REST API."""
+    """HTTP Request handler for StayTrace REST API."""
 
     service: TrackingService = TrackingService()
 

@@ -1,4 +1,4 @@
--- ParcelPulse Database Schema
+-- StayTrace Database Schema
 
 PRAGMA foreign_keys = ON;
 

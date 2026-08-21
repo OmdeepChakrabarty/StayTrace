@@ -1,5 +1,5 @@
 """
-Pure data normalization functions for ParcelPulse.
+Pure data normalization functions for StayTrace.
 Completely deterministic, no I/O, no network calls, no database connections.
 """
 

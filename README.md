@@ -1,6 +1,6 @@
-# StayTrace (ParcelPulse)
+# StayTrace
 
-StayTrace is an automated parcel tracking, normalization, and logistics data aggregation engine. It ingests tracking data across various shipping carriers (USPS, FedEx, UPS, DHL, Amazon Logistics, OnTrac, etc.), normalizes carrier-specific structures into canonical models, reconciles historical checkpoints with incoming updates, and provides a persistent SQLite query layer, REST API, scheduled polling worker, and web dashboard.
+StayTrace is an automated parcel tracking, normalization, and logistics data aggregation engine. It ingests tracking data across various shipping carriers (USPS, FedEx, UPS, DHL, Amazon Logistics, OnTrac, etc.), normalizes carrier-specific structures into canonical models, reconciles historical checkpoints with incoming updates, and provides a persistent SQLite/Turso query layer, REST API, scheduled polling worker, and web dashboard.
 
 ---
 
@@ -32,7 +32,7 @@ StayTrace enforces clean separation of concerns across pure domain logic, extern
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     Persistence Layer                       │
-│                     (SQLite Database)                       │
+│             (SQLite or Turso / libSQL Database)             │
 │              parcels • events • scrape_logs                 │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -188,10 +188,13 @@ docker compose down
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
+| `DATABASE_BACKEND` | Database backend selector (`sqlite` or `turso`) | `sqlite` |
+| `DATABASE_PATH` | Path to local SQLite database file | `parcels.db` |
+| `TURSO_DATABASE_URL` | Turso / libSQL database URL (e.g., `libsql://db-name.turso.io`) | `""` |
+| `TURSO_AUTH_TOKEN` | Turso authentication token | `""` |
 | `BRIGHTDATA_API_KEY` | Bright Data API token for Web Unlocker proxy requests | `""` |
 | `BRIGHTDATA_ZONE` | Bright Data zone name | `web_unlocker` |
 | `BRIGHTDATA_ENDPOINT`| Bright Data base API endpoint | `https://api.brightdata.com` |
-| `DATABASE_PATH` | Path to SQLite database file | `parcels.db` |
 | `API_HOST` | Host address for API server binding | `0.0.0.0` |
 | `API_PORT` | Port for API server | `8000` |
 | `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) | `INFO` |
@@ -206,7 +209,7 @@ docker compose down
   ```json
   {
     "status": "healthy",
-    "service": "StayTrace ParcelPulse API",
+    "service": "StayTrace API",
     "database": "connected"
   }
   ```
@@ -327,4 +330,4 @@ The workflow runs the full test suite and executes the active parcel crawler usi
 ## 10. Known Limitations
 
 - **Carrier Parsing Variations**: Raw HTML scraping fallback returns minimal status if carrier tracking page layout changes without API structured output.
-- **Single-Node SQLite**: Persistence uses SQLite with WAL mode and foreign key constraints; suitable for single-instance deployments.
+- **Single-Node SQLite vs. Cloud libSQL**: Local development uses standard SQLite file storage; production can use managed Turso/libSQL for distributed edge queries.

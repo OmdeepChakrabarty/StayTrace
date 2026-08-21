@@ -1,5 +1,5 @@
 """
-Parcel resolution and checkpoint reconciliation logic for ParcelPulse.
+Parcel resolution and checkpoint reconciliation logic for StayTrace.
 Completely deterministic, pure logic, no I/O, no network calls, no database connections.
 """
 

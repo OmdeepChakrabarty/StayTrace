@@ -1,5 +1,5 @@
 """
-Bright Data external-service boundary for ParcelPulse.
+Bright Data external-service boundary for StayTrace.
 Encapsulates all communication with Bright Data Web Unlocker / Scraping API.
 Mockable, testable, zero hardcoded secrets.
 """
@@ -90,7 +90,7 @@ class BrightDataClient:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "ParcelPulse/1.0",
+            "User-Agent": "StayTrace/1.0",
         }
 
     def unlock_url(self, target_url: str, format: str = "raw") -> requests.Response:
