@@ -1,0 +1,22 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: staytrace-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - DATABASE_PATH=/app/data/parcels.db
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - BRIGHTDATA_API_KEY=${BRIGHTDATA_API_KEY:-}
+      - BRIGHTDATA_ZONE=${BRIGHTDATA_ZONE:-web_unlocker}
+      - BRIGHTDATA_ENDPOINT=${BRIGHTDATA_ENDPOINT:-https://api.brightdata.com}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - staytrace_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  staytrace_data:
