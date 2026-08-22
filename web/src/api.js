@@ -3,7 +3,7 @@
  * Uses relative paths by default to leverage Vite development proxy or reverse proxy.
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
+const API_BASE = (import.meta.env.VITE_API_URL || 'https://staytrace-api.onrender.com').replace(/\/$/, '')
 
 export async function checkHealth() {
   const res = await fetch(`${API_BASE}/health`)
