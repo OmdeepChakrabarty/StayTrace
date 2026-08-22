@@ -165,7 +165,13 @@ class BrightDataClient:
         response = self.unlock_url(target_url, format="json")
 
         try:
-            return response.json()
+            data = response.json()
+            if isinstance(data, dict):
+                if not data.get("tracking_number"):
+                    data["tracking_number"] = norm_tracking
+                if not data.get("carrier"):
+                    data["carrier"] = norm_carrier
+            return data
         except Exception:
             return {
                 "tracking_number": norm_tracking,

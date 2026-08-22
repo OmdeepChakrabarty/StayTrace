@@ -418,7 +418,7 @@ def main() -> None:
     )
     
     host = os.environ.get("API_HOST", "0.0.0.0")
-    port = int(os.environ.get("API_PORT", "8000"))
+    port = int(os.environ.get("PORT") or os.environ.get("API_PORT", "8000"))
     db_path = os.environ.get("DATABASE_PATH", "parcels.db")
     
     logger.info("Starting StayTrace API on %s:%d (Database: %s)", host, port, db_path)
