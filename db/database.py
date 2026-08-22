@@ -259,8 +259,73 @@ def db_session(db_path: Optional[str] = None) -> Generator[sqlite3.Connection, N
         conn.close()
 
 
+def _run_migrations(db_path: Optional[str] = None) -> None:
+    """Safely apply column migrations to existing SQLite or Turso database tables."""
+    new_parcel_cols = [
+        ("shipment_type", "TEXT NOT NULL DEFAULT 'parcel'"),
+        ("shipping_line", "TEXT"),
+        ("vessel_name", "TEXT"),
+        ("voyage_number", "TEXT"),
+        ("origin_port", "TEXT"),
+        ("origin_port_code", "TEXT"),
+        ("destination_port", "TEXT"),
+        ("destination_port_code", "TEXT"),
+        ("current_location", "TEXT"),
+        ("estimated_departure", "TEXT"),
+        ("actual_departure", "TEXT"),
+        ("estimated_arrival", "TEXT"),
+        ("actual_arrival", "TEXT"),
+        ("healing_status", "TEXT"),
+        ("healing_confidence", "REAL"),
+        ("healing_details", "TEXT"),
+    ]
+    new_event_cols = [
+        ("event_type", "TEXT"),
+        ("location_code", "TEXT"),
+        ("vessel", "TEXT"),
+        ("voyage", "TEXT"),
+        ("source", "TEXT"),
+    ]
+
+    if is_turso_backend(db_path):
+        client = get_turso_client()
+        for col_name, col_type in new_parcel_cols:
+            try:
+                client.execute(f"ALTER TABLE parcels ADD COLUMN {col_name} {col_type};")
+            except Exception:
+                pass
+        for col_name, col_type in new_event_cols:
+            try:
+                client.execute(f"ALTER TABLE events ADD COLUMN {col_name} {col_type};")
+            except Exception:
+                pass
+        return
+
+    with db_session(db_path) as conn:
+        cursor = conn.cursor()
+        # Check parcels table columns
+        cursor.execute("PRAGMA table_info(parcels);")
+        existing_parcel_cols = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in new_parcel_cols:
+            if col_name not in existing_parcel_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE parcels ADD COLUMN {col_name} {col_type};")
+                except Exception as e:
+                    logger.debug("Column migration skipped for %s: %s", col_name, e)
+
+        # Check events table columns
+        cursor.execute("PRAGMA table_info(events);")
+        existing_event_cols = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in new_event_cols:
+            if col_name not in existing_event_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE events ADD COLUMN {col_name} {col_type};")
+                except Exception as e:
+                    logger.debug("Column migration skipped for %s: %s", col_name, e)
+
+
 def init_db(db_path: Optional[str] = None, schema_path: Optional[Path | str] = None) -> None:
-    """Initialize database tables and indexes from schema SQL script."""
+    """Initialize database tables and indexes from schema SQL script and apply migrations."""
     schema_file = Path(schema_path) if schema_path else DEFAULT_SCHEMA_PATH
     if not schema_file.exists():
         raise FileNotFoundError(f"Schema file not found at: {schema_file}")
@@ -270,16 +335,21 @@ def init_db(db_path: Optional[str] = None, schema_path: Optional[Path | str] = N
     if is_turso_backend(db_path):
         client = get_turso_client()
         client.executescript(schema_sql)
+        _run_migrations(db_path)
     else:
         with db_session(db_path) as conn:
             conn.executescript(schema_sql)
+        _run_migrations(db_path)
 
 
 def dict_from_row(row: Optional[Union[sqlite3.Row, Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
     """Convert sqlite3.Row or dict object to a plain dictionary."""
     if row is None:
         return None
-    return dict(row)
+    d = dict(row)
+    if d.get("shipment_type") == "ocean_container" and not d.get("container_number"):
+        d["container_number"] = d.get("tracking_number")
+    return d
 
 
 def upsert_parcel(
@@ -287,13 +357,26 @@ def upsert_parcel(
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    """Insert a new parcel or update an existing parcel by tracking_number."""
-    tracking_number = parcel.get("tracking_number", "").strip()
+    """Insert a new parcel or container shipment or update an existing record by tracking_number."""
+    tracking_number = (parcel.get("tracking_number") or parcel.get("container_number") or "").strip()
     if not tracking_number:
-        raise ValueError("tracking_number is required to save a parcel")
+        raise ValueError("tracking_number is required to save a shipment")
 
-    carrier = parcel.get("carrier", "other")
+    shipment_type = parcel.get("shipment_type", "parcel")
+    carrier = parcel.get("carrier") or parcel.get("shipping_line") or "other"
     status = parcel.get("status", "unknown")
+    shipping_line = parcel.get("shipping_line") or (carrier if shipment_type == "ocean_container" else None)
+    vessel_name = parcel.get("vessel_name")
+    voyage_number = parcel.get("voyage_number")
+    origin_port = parcel.get("origin_port")
+    origin_port_code = parcel.get("origin_port_code")
+    destination_port = parcel.get("destination_port")
+    destination_port_code = parcel.get("destination_port_code")
+    current_location = parcel.get("current_location")
+    estimated_departure = parcel.get("estimated_departure")
+    actual_departure = parcel.get("actual_departure")
+    estimated_arrival = parcel.get("estimated_arrival")
+    actual_arrival = parcel.get("actual_arrival")
     sender_address = parcel.get("sender_address")
     recipient_address = parcel.get("recipient_address")
     origin_country = parcel.get("origin_country")
@@ -301,6 +384,9 @@ def upsert_parcel(
     estimated_delivery = parcel.get("estimated_delivery")
     weight = parcel.get("weight")
     service_type = parcel.get("service_type")
+    healing_status = parcel.get("healing_status")
+    healing_confidence = parcel.get("healing_confidence")
+    healing_details = parcel.get("healing_details")
 
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     created_at = parcel.get("created_at") or now_iso
@@ -308,13 +394,30 @@ def upsert_parcel(
 
     sql = """
     INSERT INTO parcels (
-        tracking_number, carrier, status, sender_address, recipient_address,
-        origin_country, destination_country, estimated_delivery, weight,
-        service_type, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        tracking_number, shipment_type, carrier, status, shipping_line,
+        vessel_name, voyage_number, origin_port, origin_port_code,
+        destination_port, destination_port_code, current_location,
+        estimated_departure, actual_departure, estimated_arrival, actual_arrival,
+        sender_address, recipient_address, origin_country, destination_country,
+        estimated_delivery, weight, service_type, healing_status,
+        healing_confidence, healing_details, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(tracking_number) DO UPDATE SET
+        shipment_type = excluded.shipment_type,
         carrier = excluded.carrier,
         status = excluded.status,
+        shipping_line = COALESCE(excluded.shipping_line, parcels.shipping_line),
+        vessel_name = COALESCE(excluded.vessel_name, parcels.vessel_name),
+        voyage_number = COALESCE(excluded.voyage_number, parcels.voyage_number),
+        origin_port = COALESCE(excluded.origin_port, parcels.origin_port),
+        origin_port_code = COALESCE(excluded.origin_port_code, parcels.origin_port_code),
+        destination_port = COALESCE(excluded.destination_port, parcels.destination_port),
+        destination_port_code = COALESCE(excluded.destination_port_code, parcels.destination_port_code),
+        current_location = COALESCE(excluded.current_location, parcels.current_location),
+        estimated_departure = COALESCE(excluded.estimated_departure, parcels.estimated_departure),
+        actual_departure = COALESCE(excluded.actual_departure, parcels.actual_departure),
+        estimated_arrival = COALESCE(excluded.estimated_arrival, parcels.estimated_arrival),
+        actual_arrival = COALESCE(excluded.actual_arrival, parcels.actual_arrival),
         sender_address = COALESCE(excluded.sender_address, parcels.sender_address),
         recipient_address = COALESCE(excluded.recipient_address, parcels.recipient_address),
         origin_country = COALESCE(excluded.origin_country, parcels.origin_country),
@@ -322,13 +425,20 @@ def upsert_parcel(
         estimated_delivery = COALESCE(excluded.estimated_delivery, parcels.estimated_delivery),
         weight = COALESCE(excluded.weight, parcels.weight),
         service_type = COALESCE(excluded.service_type, parcels.service_type),
+        healing_status = COALESCE(excluded.healing_status, parcels.healing_status),
+        healing_confidence = COALESCE(excluded.healing_confidence, parcels.healing_confidence),
+        healing_details = COALESCE(excluded.healing_details, parcels.healing_details),
         updated_at = excluded.updated_at
     RETURNING id;
     """
     params = (
-        tracking_number, carrier, status, sender_address, recipient_address,
-        origin_country, destination_country, estimated_delivery, weight,
-        service_type, created_at, updated_at,
+        tracking_number, shipment_type, carrier, status, shipping_line,
+        vessel_name, voyage_number, origin_port, origin_port_code,
+        destination_port, destination_port_code, current_location,
+        estimated_departure, actual_departure, estimated_arrival, actual_arrival,
+        sender_address, recipient_address, origin_country, destination_country,
+        estimated_delivery, weight, service_type, healing_status,
+        healing_confidence, healing_details, created_at, updated_at,
     )
 
     if is_turso_backend(db_path) and not conn:
@@ -336,7 +446,6 @@ def upsert_parcel(
         res = client.execute(sql, params)
         if res.rows and "id" in res.rows[0]:
             return res.rows[0]["id"]
-        # Fallback query
         fallback_res = client.execute("SELECT id FROM parcels WHERE tracking_number = ?;", (tracking_number,))
         if fallback_res.rows:
             return fallback_res.rows[0]["id"]
@@ -412,21 +521,26 @@ def get_parcel_by_id(
 def list_parcels(
     carrier: Optional[str] = None,
     status: Optional[str] = None,
+    shipment_type: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> List[Dict[str, Any]]:
-    """Query list of parcels with optional filtering and pagination."""
+    """Query list of parcels and container shipments with optional filtering and pagination."""
     clauses = []
     params: List[Any] = []
 
     if carrier:
-        clauses.append("carrier = ?")
-        params.append(carrier.strip().lower())
+        clauses.append("(carrier = ? OR shipping_line = ?)")
+        clean_carrier = carrier.strip().lower()
+        params.extend([clean_carrier, clean_carrier])
     if status:
         clauses.append("status = ?")
         params.append(status.strip().lower())
+    if shipment_type:
+        clauses.append("shipment_type = ?")
+        params.append(shipment_type.strip().lower())
 
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     query = f"SELECT * FROM parcels {where_sql} ORDER BY updated_at DESC LIMIT ? OFFSET ?;"
@@ -435,12 +549,13 @@ def list_parcels(
     if is_turso_backend(db_path) and not conn:
         client = get_turso_client()
         res = client.execute(query, params)
-        return res.rows
+        return [dict_from_row(r) for r in res.rows if r]
 
     def _execute(connection: sqlite3.Connection):
         cursor = connection.cursor()
         cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict_from_row(row) for row in cursor.fetchall()]
+        return [r for r in rows if r is not None]
 
     if conn:
         return _execute(conn)
@@ -454,7 +569,7 @@ def delete_parcel(
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> bool:
-    """Delete a parcel and all cascading records."""
+    """Delete a parcel or container shipment and all cascading records."""
     clean_tracking = tracking_number.strip()
     query = "DELETE FROM parcels WHERE tracking_number = ?;"
 
@@ -484,16 +599,27 @@ def insert_event(
     """Insert a single tracking event checkpoint."""
     timestamp = event.get("timestamp") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     status = event.get("status", "unknown")
+    event_type = event.get("event_type") or event.get("event_code") or status
     description = event.get("description")
     location = event.get("location")
+    location_code = event.get("location_code")
     event_code = event.get("event_code")
+    vessel = event.get("vessel")
+    voyage = event.get("voyage")
+    source = event.get("source", "carrier")
     created_at = event.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     query = """
-    INSERT INTO events (parcel_id, timestamp, status, description, location, event_code, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO events (
+        parcel_id, timestamp, status, event_type, description,
+        location, location_code, event_code, vessel, voyage, source, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
-    params = (parcel_id, timestamp, status, description, location, event_code, created_at)
+    params = (
+        parcel_id, timestamp, status, event_type, description,
+        location, location_code, event_code, vessel, voyage, source, created_at
+    )
 
     if is_turso_backend(db_path) and not conn:
         client = get_turso_client()
@@ -518,7 +644,7 @@ def insert_events(
     db_path: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    """Batch insert multiple tracking events for a parcel."""
+    """Batch insert multiple tracking events for a parcel or container shipment."""
     if not events:
         return 0
 
@@ -528,17 +654,25 @@ def insert_events(
             parcel_id,
             ev.get("timestamp") or now_iso,
             ev.get("status", "unknown"),
+            ev.get("event_type") or ev.get("event_code") or ev.get("status", "unknown"),
             ev.get("description"),
             ev.get("location"),
+            ev.get("location_code"),
             ev.get("event_code"),
+            ev.get("vessel"),
+            ev.get("voyage"),
+            ev.get("source", "carrier"),
             ev.get("created_at") or now_iso,
         )
         for ev in events
     ]
 
     query = """
-    INSERT INTO events (parcel_id, timestamp, status, description, location, event_code, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?);
+    INSERT INTO events (
+        parcel_id, timestamp, status, event_type, description,
+        location, location_code, event_code, vessel, voyage, source, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     """
 
     if is_turso_backend(db_path) and not conn:

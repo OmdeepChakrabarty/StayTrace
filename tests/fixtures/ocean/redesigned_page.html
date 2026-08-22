@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Carrier Hub 2.0 - Live Freight Portal</title>
+</head>
+<body class="theme-modern">
+  <div class="ad-banner">
+    <p>Special Offer: Book your next freight slot with 15% discount using promo code FREIGHT2026!</p>
+  </div>
+
+  <main class="c-portal-layout">
+    <section class="c-hero-summary">
+      <div class="c-hero__badge">
+        <dt class="c-meta-label">Equipment ID / Container No:</dt>
+        <dd class="c-hero__cntr-ref">MSCU1234566</dd>
+      </div>
+
+      <div class="c-hero__operator">
+        <span class="label-muted">Ocean Carrier:</span>
+        <strong class="carrier-brand-name">MSC Mediterranean Shipping</strong>
+      </div>
+
+      <div class="c-hero__state">
+        <span class="label-muted">Current Status:</span>
+        <div class="status-pill--active">Underway at Sea</div>
+      </div>
+    </section>
+
+    <!-- Redesigned flex route section with new structure -->
+    <section class="route-overview-grid">
+      <article class="route-card origin">
+        <div class="route-card__title">Port of Loading:</div>
+        <div class="route-card__value port-pill--pol">Shanghai, China (CNSHA)</div>
+      </article>
+
+      <div class="route-card transit-vessel">
+        <div class="route-card__title">Mother Vessel:</div>
+        <div class="route-card__value vessel-name-tag">MSC ISABELLA</div>
+        <div class="route-card__title">Voyage Number:</div>
+        <div class="route-card__value voyage-tag">FD432R</div>
+      </div>
+
+      <article class="route-card destination">
+        <div class="route-card__title">Port of Discharge:</div>
+        <div class="route-card__value port-pill--pod">Rotterdam, Netherlands (NLRTM)</div>
+      </article>
+
+      <article class="route-card eta">
+        <div class="route-card__title">Estimated Time of Arrival:</div>
+        <div class="route-card__value eta-time-val">2026-09-15T14:00:00Z</div>
+      </article>
+    </section>
+
+    <!-- Redesigned timeline without table tags -->
+    <section class="c-timeline-stream">
+      <h3 class="c-timeline-stream__heading">Shipment Milestones</h3>
+      <ul class="c-milestones-list">
+        <li class="c-milestone-item">
+          <time class="c-milestone__timestamp">2026-08-20T08:00:00Z</time>
+          <span class="c-milestone__status">Container Received at Terminal</span>
+          <p class="c-milestone__desc">Gate in scan recorded at Shanghai CY terminal</p>
+        </li>
+        <li class="c-milestone-item">
+          <time class="c-milestone__timestamp">2026-08-21T18:30:00Z</time>
+          <span class="c-milestone__status">Loaded on Vessel</span>
+          <p class="c-milestone__desc">Container laden on board MSC ISABELLA at CNSHA</p>
+        </li>
+        <li class="c-milestone-item">
+          <time class="c-milestone__timestamp">2026-08-22T04:00:00Z</time>
+          <span class="c-milestone__status">Vessel Departure</span>
+          <p class="c-milestone__desc">Vessel departed Shanghai port, sailing en route</p>
+        </li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

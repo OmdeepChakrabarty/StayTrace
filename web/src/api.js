@@ -74,3 +74,64 @@ export async function deleteParcel(trackingNumber) {
   }
   return data
 }
+
+// ===== Ocean / Container Shipment Tracking =====
+
+export async function trackContainer(containerNumber, shippingLine = null) {
+  const body = {
+    container_number: containerNumber.trim(),
+  }
+  if (shippingLine && shippingLine !== 'auto') {
+    body.shipping_line = shippingLine
+  }
+
+  const res = await fetch(`${API_BASE}/api/track/container`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    const errorMsg = data.error || data.details || `Error tracking shipment (${res.status})`
+    const error = new Error(errorMsg)
+    error.status = res.status
+    error.data = data
+    throw error
+  }
+  return data
+}
+
+export async function listContainers(shippingLine = '', status = '', limit = 50) {
+  const params = new URLSearchParams()
+  if (shippingLine && shippingLine !== 'all') params.append('shipping_line', shippingLine)
+  if (status && status !== 'all') params.append('status', status)
+  params.append('limit', limit.toString())
+
+  const res = await fetch(`${API_BASE}/api/containers?${params.toString()}`)
+  if (!res.ok) {
+    throw new Error(`Failed to list containers (${res.status})`)
+  }
+  return res.json()
+}
+
+export async function getContainer(containerNumber) {
+  const res = await fetch(`${API_BASE}/api/containers/${encodeURIComponent(containerNumber)}`)
+  const data = await res.json()
+  if (!res.ok) {
+    const error = new Error(data.error || `Failed to get container (${res.status})`)
+    error.status = res.status
+    throw error
+  }
+  return data
+}
+
+export async function runHealingDemo(scenario = 'redesigned') {
+  const res = await fetch(`${API_BASE}/api/demo/heal?scenario=${encodeURIComponent(scenario)}`)
+  if (!res.ok) {
+    throw new Error(`Self-healing demo failed (${res.status})`)
+  }
+  return res.json()
+}

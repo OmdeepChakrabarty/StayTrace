@@ -49,6 +49,140 @@ CARRIER_TRACKING_PATTERNS = {
     ],
 }
 
+# ISO 6346 / BIC Container Letter Values (multiples of 11: 11, 22, 33 are omitted)
+ISO_6346_LETTER_VALUES: Dict[str, int] = {
+    'A': 10, 'B': 12, 'C': 13, 'D': 14, 'E': 15, 'F': 16, 'G': 17, 'H': 18, 'I': 19, 'J': 20,
+    'K': 21, 'L': 23, 'M': 24, 'N': 25, 'O': 26, 'P': 27, 'Q': 28, 'R': 29, 'S': 30, 'T': 31,
+    'U': 32, 'V': 34, 'W': 35, 'X': 36, 'Y': 37, 'Z': 38
+}
+
+SHIPPING_LINE_PREFIXES: Dict[str, str] = {
+    "MSCU": "msc",
+    "MEDU": "msc",
+    "MAEU": "maersk",
+    "MSKU": "maersk",
+    "MRKU": "maersk",
+    "PONU": "maersk",
+    "CMAU": "cma_cgm" ,
+    "CGMU": "cma_cgm",
+    "APLU": "cma_cgm",
+    "ANLU": "cma_cgm",
+    "COSU": "cosco",
+    "CCLU": "cosco",
+    "CBHU": "cosco",
+    "HLCU": "hapag_lloyd",
+    "HLXU": "hapag_lloyd",
+    "HAMU": "hapag_lloyd",
+    "UASC": "hapag_lloyd",
+    "ONEU": "one",
+    "NYKU": "one",
+    "MOLU": "one",
+    "KKFU": "one",
+    "EGLV": "evergreen",
+    "EGHU": "evergreen",
+    "EMCU": "evergreen",
+    "EISU": "evergreen",
+    "ZIMU": "zim",
+    "ZCSU": "zim",
+    "YMLU": "yang_ming",
+    "HMMU": "hmm",
+    "HDMU": "hmm",
+}
+
+
+def calculate_iso6346_check_digit(container_prefix_and_serial: str) -> Optional[int]:
+    """
+    Calculate the ISO 6346 check digit for a 10-character container prefix + serial.
+    Example: 'MSCU123456' -> 6
+    """
+    cleaned = re.sub(r"\s+", "", container_prefix_and_serial.strip().upper())
+    if len(cleaned) < 10 or not re.match(r"^[A-Z]{4}\d{6}$", cleaned[:10]):
+        return None
+
+    first10 = cleaned[:10]
+    total = 0
+    for i, ch in enumerate(first10):
+        if ch in ISO_6346_LETTER_VALUES:
+            val = ISO_6346_LETTER_VALUES[ch]
+        elif ch.isdigit():
+            val = int(ch)
+        else:
+            return None
+        total += val * (2 ** i)
+
+    rem = total % 11
+    return 0 if rem == 10 else rem
+
+
+def is_valid_container_number(container_number: Optional[str], strict_check_digit: bool = True) -> bool:
+    """
+    Validate an ISO 6346 / BIC shipping container number.
+    Format: 4 letters (3 owner code + 1 equipment identifier U/J/Z) + 6 numeric serial + 1 check digit.
+    """
+    if not container_number or not isinstance(container_number, str):
+        return False
+
+    cleaned = re.sub(r"\s+", "", container_number.strip().upper())
+    if not re.match(r"^[A-Z]{3}[UJZ]\d{7}$", cleaned):
+        return False
+
+    if not strict_check_digit:
+        return True
+
+    expected_check = calculate_iso6346_check_digit(cleaned[:10])
+    if expected_check is None:
+        return False
+
+    actual_check = int(cleaned[10])
+    return actual_check == expected_check
+
+
+def is_valid_bol_number(bol_number: Optional[str]) -> bool:
+    """Validate a standard ocean shipping line Bill of Lading (B/L) number."""
+    if not bol_number or not isinstance(bol_number, str):
+        return False
+    cleaned = re.sub(r"\s+", "", bol_number.strip().upper())
+    return bool(re.match(r"^[A-Z0-9]{8,22}$", cleaned)) and bool(re.search(r"\d", cleaned)) and bool(re.search(r"[A-Z]", cleaned))
+
+
+def detect_shipping_line(identifier: Optional[str]) -> Optional[str]:
+    """Infer the shipping line from container prefix or B/L prefix."""
+    if not identifier or not isinstance(identifier, str):
+        return None
+
+    cleaned = re.sub(r"\s+", "", identifier.strip().upper())
+    if len(cleaned) >= 4:
+        prefix4 = cleaned[:4]
+        if prefix4 in SHIPPING_LINE_PREFIXES:
+            return SHIPPING_LINE_PREFIXES[prefix4]
+
+    for prefix, line in SHIPPING_LINE_PREFIXES.items():
+        if cleaned.startswith(prefix):
+            return line
+
+    return None
+
+
+def detect_shipment_type(identifier: Optional[str]) -> str:
+    """
+    Detect whether an identifier represents an ocean container shipment or an individual parcel.
+    Returns 'ocean_container' or 'parcel'.
+    """
+    if not identifier or not isinstance(identifier, str):
+        return "parcel"
+
+    cleaned = re.sub(r"\s+", "", identifier.strip().upper())
+
+    # Check container format (4 letters + 7 digits)
+    if re.match(r"^[A-Z]{3}[UJZ]\d{7}$", cleaned):
+        return "ocean_container"
+
+    # Check known ocean shipping line prefixes
+    if len(cleaned) >= 4 and cleaned[:4] in SHIPPING_LINE_PREFIXES:
+        return "ocean_container"
+
+    return "parcel"
+
 
 def is_valid_tracking_number(carrier: Optional[str], tracking_number: Optional[str]) -> bool:
     """Validate whether a tracking number is valid for a given carrier."""

@@ -46,3 +46,6 @@ web/dist/
 .vite/
 .wrangler/
 
+
+# Session artifacts
+session-*.md

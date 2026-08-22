@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Ocean Track & Trace - MSC Mediterranean Shipping Company</title>
+</head>
+<body>
+  <div class="tracking-dashboard">
+    <div class="header-card">
+      <span class="label">Container Number:</span>
+      <h1 class="container-number">MSCU1234566</h1>
+      <span class="shipping-line">MSC Mediterranean Shipping Company</span>
+      <div class="shipment-status">In Transit</div>
+    </div>
+
+    <div class="route-details">
+      <div class="detail-block">
+        <label>Origin Port:</label>
+        <span class="origin-port">Shanghai (CNSHA)</span>
+      </div>
+      <div class="detail-block">
+        <label>Destination Port:</label>
+        <span class="destination-port">Rotterdam (NLRTM)</span>
+      </div>
+      <div class="detail-block">
+        <label>Vessel Name:</label>
+        <span class="vessel-name">MSC ISABELLA</span>
+      </div>
+      <div class="detail-block">
+        <label>Voyage Number:</label>
+        <span class="voyage-number">FD432R</span>
+      </div>
+      <div class="detail-block">
+        <label>Estimated Arrival:</label>
+        <span class="eta-date">2026-09-15T14:00:00Z</span>
+      </div>
+    </div>
+
+    <div class="timeline-section">
+      <h2>Checkpoints</h2>
+      <table class="events-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Status</th>
+            <th>Description</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="checkpoint-row">
+            <td class="event-time">2026-08-20T08:00:00Z</td>
+            <td class="event-status">Gate In</td>
+            <td class="event-desc">Container received at terminal</td>
+            <td class="event-loc">Shanghai Terminal, China</td>
+          </tr>
+          <tr class="checkpoint-row">
+            <td class="event-time">2026-08-21T18:30:00Z</td>
+            <td class="event-status">Loaded on Vessel</td>
+            <td class="event-desc">Laden on board MSC ISABELLA</td>
+            <td class="event-loc">Shanghai (CNSHA)</td>
+          </tr>
+          <tr class="checkpoint-row">
+            <td class="event-time">2026-08-22T04:00:00Z</td>
+            <td class="event-status">In Transit</td>
+            <td class="event-desc">Vessel departed port of loading</td>
+            <td class="event-loc">East China Sea</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
