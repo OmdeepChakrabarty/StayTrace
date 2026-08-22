@@ -35,8 +35,12 @@ jobs:
 
       - name: Run active parcel crawler
         env:
+          DATABASE_BACKEND: ${{ secrets.DATABASE_BACKEND || 'turso' }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
-          BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE }}
+          BRIGHTDATA_ZONE: ${{ secrets.BRIGHTDATA_ZONE || 'cli_unlocker' }}
+          BRIGHTDATA_ENDPOINT: ${{ secrets.BRIGHTDATA_ENDPOINT || 'https://api.brightdata.com' }}
           DATABASE_PATH: parcels.db
           LOG_LEVEL: INFO
         run: |
