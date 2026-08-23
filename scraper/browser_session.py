@@ -230,6 +230,83 @@ _NOT_READY_JS = """
 })()
 """
 
+# Generic rendered-page form interaction: scores visible inputs against common
+# logistics field labels, fills the best match with the requested reference,
+# then submits via the best button, the owning form, or Enter. Success is
+# NEVER inferred from this action itself - only the caller's success_js
+# (reference present in rendered innerText) proves results were rendered.
+_AUTO_FORM_JS = """
+(() => {
+  const REF = %(value)s;
+  const bodyText = document.body ? document.body.innerText : '';
+  if (bodyText.includes(REF)) return { already: true };
+
+  const FIELD_KEY = /(container|tracking|reference|shipment|cargo|number|b\\s*\\/\\s*l|bill\\s*of\\s*lading|search|query|ref)/i;
+  const visible = (el) => !!(el && (el.offsetParent !== null || document.activeElement === el));
+
+  let best = null;
+  let bestScore = 0;
+  for (const input of document.querySelectorAll('input:not([type=hidden])')) {
+    const type = (input.type || '').toLowerCase();
+    if (['submit', 'button', 'image', 'checkbox', 'radio', 'file'].includes(type)) continue;
+    if (!visible(input)) continue;
+
+    let label = '';
+    try {
+      if (input.labels) label += ' ' + [...input.labels].map((l) => l.innerText).join(' ');
+    } catch (e) {}
+    label += ' ' + (input.placeholder || '') + ' ' + (input.getAttribute('aria-label') || '');
+    try {
+      const ctx = input.closest('form, div, section, p, td, li');
+      if (ctx) {
+        const l = ctx.querySelector('label');
+        if (l) label += ' ' + l.innerText;
+      }
+    } catch (e) {}
+
+    let score = 0;
+    if (FIELD_KEY.test(label)) score += 3;
+    if (FIELD_KEY.test(input.name || '') || FIELD_KEY.test(input.id || '')) score += 2;
+    if (type === 'search' || /search/i.test((input.placeholder || '') + (input.id || '') + (input.name || ''))) score += 1;
+    if (!input.value) score += 0.5;
+    if (score > bestScore) { bestScore = score; best = input; }
+  }
+
+  if (!best || bestScore < 2) return { filled: false, reason: 'no matching input' };
+
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  ).set;
+  setter.call(best, REF);
+  best.dispatchEvent(new Event('input', { bubbles: true }));
+  best.dispatchEvent(new Event('change', { bubbles: true }));
+
+  let btn = null;
+  let btnScore = 0;
+  for (const b of document.querySelectorAll('button, input[type=submit], [role=button]')) {
+    if (!visible(b)) continue;
+    const text = ((b.innerText || b.value || '') + ' ' + (b.id || '') + ' ' + (b.className || '')).trim();
+    let s = 0;
+    if (/track|trace|search|go\\b|submit|find|query|arrow/i.test(text)) s += 2;
+    if ((b.type || '').toLowerCase() === 'submit') s += 1;
+    if (best.form && b.form === best.form) s += 2;
+    if (s > btnScore) { btnScore = s; btn = b; }
+  }
+
+  if (btn) {
+    btn.click();
+    return { filled: true, action: 'click' };
+  }
+  if (best.form && typeof best.form.requestSubmit === 'function') {
+    best.form.requestSubmit();
+    return { filled: true, action: 'requestSubmit' };
+  }
+  best.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  best.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+  return { filled: true, action: 'enter' };
+})()
+"""
+
 
 def fetch_rendered_html(
     start_url: str,
@@ -240,6 +317,8 @@ def fetch_rendered_html(
     max_page_wait: float = 60.0,
     poll_interval: float = 2.0,
     overall_timeout: float = 240.0,
+    auto_form: bool = False,
+    auto_form_value: Optional[str] = None,
 ) -> str:
     """
     Run a single remote-browser session against an official carrier page and
@@ -251,6 +330,12 @@ def fetch_rendered_html(
 
     If ready_selector is given, interaction waits until that element is present
     (anti-bot interstitials such as DataDome challenges resolve automatically).
+
+    With auto_form=True, when the page has not already rendered results for
+    auto_form_value (typically a container/tracking reference), the best-
+    scoring visible search field is filled and submitted within the same
+    browser session. This is only an interaction aid: success is still decided
+    exclusively by success_js - never by the URL or query string.
 
     success_js must be a carrier-defined JavaScript boolean expression so that
     only genuinely rendered tracking results count as success - never URL
@@ -341,6 +426,20 @@ def fetch_rendered_html(
             if not ok:
                 raise BrowserSessionError(f"Submit target not found on page: {submit_selector}")
 
+        # Generic form fallback for carriers without a carrier-specific plan:
+        # fill the best-scoring search field and submit it in-session.
+        if auto_form and auto_form_value and not (fill or submit_selector):
+            try:
+                browser.command(
+                    "Runtime.evaluate",
+                    session_id=session_id,
+                    expression=_AUTO_FORM_JS % {"value": json.dumps(auto_form_value)},
+                    returnByValue=True,
+                    timeout=min(30.0, time_left()),
+                )
+            except BrowserSessionError:
+                pass  # interaction failures leave the success check to decide
+
         page_deadline = time.monotonic() + max_page_wait
         final_html: Optional[str] = None
         outcome = "timeout"
@@ -410,3 +509,28 @@ def fetch_carrier_page_via_browser(adapter: Any, container_number: str) -> str:
         except BrowserSessionError as e:
             last_error = e
     raise last_error
+
+
+def fetch_generic_rendered_carrier_page(
+    url: str,
+    reference: str,
+    max_page_wait: float = 45.0,
+    overall_timeout: float = 90.0,
+) -> str:
+    """
+    Bounded rendered-browser fallback for any registered carrier without a
+    carrier-specific plan. Navigates to the carrier's official URL and uses
+    the generic scored-form interaction to submit the reference within the
+    same session. Success strictly requires the reference to appear in the
+    rendered page text - URL/query-string echoes never count.
+    """
+    from scraper.ocean_sources import _rendered_reference_success_js
+
+    return fetch_rendered_html(
+        url,
+        success_js=_rendered_reference_success_js(reference),
+        auto_form=True,
+        auto_form_value=reference,
+        max_page_wait=max_page_wait,
+        overall_timeout=overall_timeout,
+    )

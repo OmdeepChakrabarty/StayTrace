@@ -57,6 +57,7 @@ from scraper.validator import (
 from scraper.ocean_sources import default_ocean_registry
 from scraper.browser_session import (
     fetch_carrier_page_via_browser,
+    fetch_generic_rendered_carrier_page,
     BrowserSessionError,
 )
 from scraper.self_healing import (
@@ -184,23 +185,32 @@ class TrackingService:
                     # Run self-healing extraction on the carrier webpage
                     incoming_container, telemetry = extract_with_self_healing(page_html, shipment_type="ocean_container")
 
-                    # Escalate to a real Scraping Browser session when the
+                    # Escalate to a bounded Scraping Browser session when the
                     # stateless source returned no usable tracking state (e.g.
-                    # JavaScript application shells from MSC / Maersk) and the
-                    # adapter declares a browser fallback plan. If the rendered
-                    # page still contains no genuine results, the session fails
-                    # safely - nothing is fabricated.
+                    # JavaScript application shells). Carriers with a specific
+                    # plan use it; all other registered carriers get the
+                    # generic rendered-form fallback against their official
+                    # URL. Carriers that already ran a browser session upfront
+                    # are not retried. If the rendered page still contains no
+                    # genuine results, the session fails safely - nothing is
+                    # fabricated.
                     if (
                         telemetry.extraction_status == "failed"
                         and ocean_adapter is not None
-                        and getattr(ocean_adapter, "browser_fallback", False)
-                        and ocean_adapter.get_browser_plan(norm_container)
+                        and not ocean_adapter.requires_browser
                     ):
                         telemetry.diagnostic_log.append(
                             "Stateless source yielded no usable tracking state; "
                             "escalating to Scraping Browser session."
                         )
-                        rendered_html = fetch_carrier_page_via_browser(ocean_adapter, norm_container)
+                        if ocean_adapter.get_browser_plan(norm_container):
+                            rendered_html = fetch_carrier_page_via_browser(ocean_adapter, norm_container)
+                        else:
+                            rendered_html = fetch_generic_rendered_carrier_page(
+                                ocean_adapter.build_tracking_url(norm_container),
+                                norm_container,
+                            )
+                        bparsed = ocean_adapter.parse_official_response(rendered_html)
                         bparsed = ocean_adapter.parse_official_response(rendered_html)
                         if bparsed is not None:
                             incoming_container = normalize_container_shipment(bparsed)
@@ -281,6 +291,45 @@ class TrackingService:
         status_code = HTTPStatus.CREATED if not existing else HTTPStatus.OK
         return final_container or resolved_container, status_code
 
+    def _parcel_rendered_browser_fallback(
+        self,
+        carrier: str,
+        tracking_number: str,
+        current_parcel: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Bounded rendered-browser fallback for parcel tracking. Fetches the
+        carrier's official page in a Scraping Browser session, runs the
+        self-healing parser on the rendered HTML, and returns a normalized
+        parcel only when genuine usable tracking state was extracted.
+        Raises BrightDataError otherwise - never fabricates state.
+        """
+        try:
+            official_url = self.client.build_tracking_url(carrier, tracking_number)
+            rendered_html = fetch_generic_rendered_carrier_page(official_url, tracking_number)
+        except BrowserSessionError as e:
+            log_scrape(tracking_number, carrier, "failed", error_message=str(e), db_path=self.db_path)
+            raise BrightDataError(f"SOURCE UNAVAILABLE — {e}")
+        except ValidationError:
+            raise BrightDataError(
+                f"SOURCE UNAVAILABLE — no official tracking source configured for carrier '{carrier}'."
+            )
+
+        extracted, telemetry = extract_with_self_healing(rendered_html, shipment_type="parcel")
+        parcel_status = (extracted.get("status") or "").strip().lower()
+        usable_state = bool(extracted.get("events")) or parcel_status not in ("", "unknown")
+
+        if telemetry.extraction_status == "failed" or not usable_state:
+            log_scrape(tracking_number, carrier, "failed", error_message="rendered page had no usable tracking state", db_path=self.db_path)
+            raise BrightDataError(
+                "SOURCE UNAVAILABLE — carrier page did not render usable tracking state for this reference."
+            )
+
+        merged = dict(extracted)
+        merged["tracking_number"] = tracking_number
+        merged["carrier"] = current_parcel.get("carrier") or carrier
+        return normalize_parcel(merged)
+
     def track_parcel(
         self,
         tracking_number: str,
@@ -331,6 +380,17 @@ class TrackingService:
                 incoming_parcel = self.client.fetch_tracking(inferred_carrier, norm_tracking)
                 if not incoming_parcel.get("tracking_number"):
                     incoming_parcel["tracking_number"] = norm_tracking
+
+                # A stateless response with no events and no known status is an
+                # extraction failure (typically a JS shell), not tracking data.
+                parcel_status = (incoming_parcel.get("status") or "").strip().lower()
+                usable_state = bool(incoming_parcel.get("events")) or parcel_status not in ("", "unknown")
+
+                if not usable_state:
+                    incoming_parcel = self._parcel_rendered_browser_fallback(
+                        inferred_carrier, norm_tracking, incoming_parcel
+                    )
+
                 log_scrape(norm_tracking, inferred_carrier, "success", db_path=self.db_path)
             except BrightDataNotFoundError as e:
                 log_scrape(norm_tracking, inferred_carrier, "not_found", error_message=str(e), db_path=self.db_path)
