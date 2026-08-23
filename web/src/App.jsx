@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { checkHealth, trackParcel, listParcels, deleteParcel } from './api'
 import { trackContainer, listContainers, getContainer, runHealingDemo } from './api'
 import AsciiEarth from './components/AsciiEarth'
@@ -553,7 +553,7 @@ function ParcelPage({ navigate }) {
 
 export default function App() {
   const [path, navigate] = usePath()
-  const [reduced] = useMemo(prefersReducedMotion, [])
+  const [reduced] = useState(prefersReducedMotion)
   const [health, setHealth] = useState('checking')
 
   // Ocean state
