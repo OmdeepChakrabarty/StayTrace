@@ -124,9 +124,10 @@ def test_browser_session_plans_by_carrier(carrier_id):
         success_js = plan["success_js"]
         assert "containerReference" in success_js
         assert "CMAU0600020" in success_js
-        # Bounded so a hanging carrier page can never stall requests.
-        assert plan["overall_timeout"] <= 150.0
-        assert plan["max_page_wait"] <= 60.0
+        # Bounded, but generous enough for slow anti-bot resolution (the
+        # verified working window for the CMA CGM path).
+        assert plan["overall_timeout"] <= 300.0
+        assert plan["max_page_wait"] <= 90.0
     elif carrier_id in ("msc", "maersk"):
         # JS-shell SPA sources: stateless first, real browser session as a
         # bounded fallback when normal extraction finds nothing usable.

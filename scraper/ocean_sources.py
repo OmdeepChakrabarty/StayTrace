@@ -166,9 +166,11 @@ class CMACGMOceanAdapter(OceanSourceAdapter):
                 ".test(document.documentElement.outerHTML)"
             ),
             # Bounded so a hanging carrier page can never stall the request
-            # indefinitely; the service retries once with a fresh session.
-            "max_page_wait": 45.0,
-            "overall_timeout": 120.0,
+            # indefinitely, but generous enough for slow anti-bot resolution
+            # (this window is what makes the verified CMA CGM path succeed);
+            # the service retries once with a fresh session.
+            "max_page_wait": 90.0,
+            "overall_timeout": 300.0,
         }
 
     def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
