@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { checkHealth, trackParcel, listParcels, deleteParcel } from './api'
 import { trackContainer, listContainers, getContainer, runHealingDemo } from './api'
+import TrackingSearch from './components/TrackingSearch'
+import ShipmentHeader from './components/ShipmentHeader'
+import RouteProgress from './components/RouteProgress'
+import ExtractionHealth from './components/ExtractionHealth'
+import ShipmentStats from './components/ShipmentStats'
+import Timeline from './components/Timeline'
 
 const CARRIERS = [
   { id: 'auto', name: 'Auto Detect Carrier' },
@@ -14,7 +20,7 @@ const CARRIERS = [
 ]
 
 const SHIPPING_LINES = [
-  { id: 'auto', name: 'Auto Detect Shipping Line' },
+  { id: 'auto', name: 'Auto Detect Line' },
   { id: 'msc', name: 'MSC' },
   { id: 'maersk', name: 'Maersk' },
   { id: 'cma_cgm', name: 'CMA CGM' },
@@ -29,133 +35,29 @@ const OCEAN_STATUS_LABELS = {
   booked: 'Booked',
   gate_in: 'Gate In',
   loaded: 'Loaded on Vessel',
-  in_transit: 'In Transit / Underway',
+  in_transit: 'In Transit',
   transshipment: 'Transshipment',
   discharged: 'Discharged',
   customs_hold: 'Customs Hold',
-  gate_out: 'Gate Out for Delivery',
+  gate_out: 'Gate Out',
   delivered: 'Delivered',
   unknown: 'Unknown',
 }
 
-function HealingBadge({ healingStatus }) {
-  if (healingStatus === 'healed') {
-    return <span className="heal-badge heal-healed" title="Website structure changed - extraction self-recovered">⚡ Self-Healed</span>
-  }
-  if (healingStatus === 'failed') {
-    return <span className="heal-badge heal-failed" title="Recovery could not be safely performed">⚠ Recovery Failed</span>
-  }
-  return <span className="heal-badge heal-normal" title="Standard extraction succeeded">✓ Normal Extraction</span>
-}
+const LINE_MARQUEE = ['MSC', 'MAERSK', 'CMA CGM', 'COSCO', 'ONE', 'HAPAG-LLOYD']
 
-function ScraperHealthPanel({ shipment }) {
-  const [open, setOpen] = useState(false)
-  let details = null
-  try {
-    details = shipment.healing_details ? JSON.parse(shipment.healing_details) : null
-  } catch {
-    details = null
-  }
-
+function BrandMark() {
   return (
-    <div className="health-panel">
-      <button className="health-toggle" onClick={() => setOpen(!open)}>
-        <HealingBadge healingStatus={shipment.healing_status} />
-        <span className="health-toggle-label">{open ? 'Hide' : 'Scraper Health'} ▾</span>
-      </button>
-      {open && (
-        <div className="health-details">
-          {details ? (
-            <>
-              <div className="health-row">
-                <span>Original extraction:</span>
-                <strong>{details.original_strategy_status === 'passed' ? 'PASSED' : 'FAILED'}</strong>
-              </div>
-              <div className="health-row">
-                <span>Recovery:</span>
-                <strong>
-                  {details.extraction_status === 'normal'
-                    ? 'NOT REQUIRED'
-                    : details.extraction_status === 'healed'
-                      ? 'SUCCESS'
-                      : 'REJECTED'}
-                </strong>
-              </div>
-              {details.failed_fields?.length > 0 && (
-                <div className="health-row">
-                  <span>Fields needing recovery:</span>
-                  <strong>{details.failed_fields.join(', ')}</strong>
-                </div>
-              )}
-              {details.recovered_fields?.length > 0 && (
-                <div className="health-row">
-                  <span>Fields recovered:</span>
-                  <strong>{details.recovered_fields.join(', ')}</strong>
-                </div>
-              )}
-              <div className="health-row">
-                <span>Validation:</span>
-                <strong>{details.validation_result === 'passed' ? 'PASSED' : details.validation_result === 'rejected_ambiguous' ? 'REJECTED (AMBIGUOUS)' : 'FAILED'}</strong>
-              </div>
-              <div className="health-row">
-                <span>Confidence:</span>
-                <strong>{(details.confidence * 100).toFixed(0)}%</strong>
-              </div>
-              {details.recovery_strategy !== 'none' && details.extraction_status === 'healed' && (
-                <div className="health-note">
-                  Website structure change detected. Semantic recovery strategy applied: {details.recovery_strategy}
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="health-note">
-              {shipment.healing_status === 'failed'
-                ? 'Recovery was rejected due to ambiguous or conflicting source evidence.'
-                : 'No structural anomalies detected during extraction.'}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    <span className="brand-mark" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 17c3-6 6-9 9-9s5 2 5 4-2 3-4 3" />
+        <circle cx="19" cy="7" r="1.6" fill="currentColor" stroke="none" />
+      </svg>
+    </span>
   )
 }
 
-function OceanRoute({ shipment }) {
-  return (
-    <div className="ocean-route">
-      <div className={`route-node ${shipment.actual_departure ? 'done' : ''}`}>
-        <div className="route-port">{shipment.origin_port || 'Origin Port'}</div>
-        {shipment.origin_port_code && <div className="route-code">{shipment.origin_port_code}</div>}
-        <div className="route-mark">{shipment.actual_departure ? '✓' : '○'}</div>
-        <div className="route-date">{shipment.estimated_departure ? `ETD ${shipment.estimated_departure.slice(0, 10)}` : ''}</div>
-      </div>
-
-      <div className={`route-line ${shipment.actual_departure ? 'active' : ''}`}>
-        <div className="route-vessel">{shipment.vessel_name || ''}</div>
-        <div className="route-voyage">{shipment.voyage_number ? `Voy ${shipment.voyage_number}` : ''}</div>
-      </div>
-
-      {shipment.current_location &&
-        shipment.current_location !== shipment.origin_port &&
-        shipment.current_location !== shipment.destination_port && (
-          <div className="route-node current">
-            <div className="route-port">{shipment.current_location}</div>
-            <div className="route-mark">◉</div>
-            <div className="route-date">Last Known Location</div>
-          </div>
-        )}
-
-      <div className="route-node destination">
-        <div className="route-port">{shipment.destination_port || 'Destination Port'}</div>
-        {shipment.destination_port_code && <div className="route-code">{shipment.destination_port_code}</div>}
-        <div className="route-mark">{shipment.status === 'delivered' ? '✓' : '●'}</div>
-        <div className="route-date">{shipment.estimated_arrival ? `ETA ${shipment.estimated_arrival.slice(0, 10)}` : ''}</div>
-      </div>
-    </div>
-  )
-}
-
-function SelfHealingDemo() {
+function SelfHealingDemo({ onNotify }) {
   const [scenario, setScenario] = useState('redesigned')
   const [demo, setDemo] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -169,6 +71,7 @@ function SelfHealingDemo() {
       setDemo(result)
     } catch {
       setDemo(null)
+      onNotify && onNotify('Self-healing demo is unavailable right now.')
     } finally {
       setLoading(false)
     }
@@ -182,63 +85,118 @@ function SelfHealingDemo() {
   const t = demo?.telemetry
 
   return (
-    <section className="history-card demo-card">
-      <div className="history-header">
-        <h2 className="card-title" style={{ margin: 0 }}>Self-Healing Demo</h2>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button className={`btn btn-secondary ${scenario === 'original' ? 'active-scenario' : ''}`} onClick={() => runDemo('original')}>Original Page</button>
-          <button className={`btn btn-secondary ${scenario === 'redesigned' ? 'active-scenario' : ''}`} onClick={() => runDemo('redesigned')}>Simulated Redesign</button>
-          <button className={`btn btn-secondary ${scenario === 'ambiguous' ? 'active-scenario' : ''}`} onClick={() => runDemo('ambiguous')}>Ambiguous Data</button>
+    <section className="panel demo-panel">
+      <div className="panel-head">
+        <div>
+          <h2 className="panel-title">Self-healing engine</h2>
+          <p className="panel-sub">
+            Controlled engineering simulation of a carrier page structure change — not live data.
+          </p>
+        </div>
+        <div className="segmented" role="group" aria-label="Demo scenario">
+          {[
+            ['original', 'Original Page'],
+            ['redesigned', 'Simulated Redesign'],
+            ['ambiguous', 'Ambiguous Data'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`segment ${scenario === id ? 'active' : ''}`}
+              onClick={() => runDemo(id)}
+              disabled={loading}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
-      <p className="demo-disclaimer">
-        Controlled engineering simulation of a website structural change — not live carrier data.
-      </p>
 
-      {loading && <p className="empty-state">Running extraction simulation...</p>}
+      {loading && (
+        <div className="demo-flow">
+          <div className="skeleton-line w60" />
+          <div className="skeleton-line w80" />
+          <div className="skeleton-line w40" />
+        </div>
+      )}
+
+      {!loading && !demo && <p className="empty-state">Simulation unavailable.</p>}
 
       {!loading && demo && t && (
-        <div className="demo-results">
-          <div className="demo-flow">
-            <div className="demo-step">
-              <div className="demo-step-title">Carrier page</div>
-              <div className="demo-step-desc">{demo.description}</div>
-            </div>
-            <div className="demo-arrow">↓</div>
-            <div className="demo-step">
-              <div className="demo-step-title">Original extraction strategy</div>
-              <div className={t.original_strategy_status === 'passed' ? 'ok-text' : 'fail-text'}>
-                {t.original_strategy_status === 'passed' ? '✓ PASSED' : '✗ FAILED'}
-              </div>
-            </div>
-            {t.original_strategy_status === 'failed' && (
-              <>
-                <div className="demo-arrow">↓</div>
-                <div className="demo-step">
-                  <div className="demo-step-title">Self-Healing Recovery ({t.recovery_strategy})</div>
-                  <div className={t.extraction_status === 'healed' ? 'ok-text' : 'fail-text'}>
-                    {t.extraction_status === 'healed' ? `⚡ RECOVERED: ${t.recovered_fields.join(', ')}` : `⚠ ${t.validation_result}`}
-                  </div>
-                </div>
-              </>
-            )}
-            <div className="demo-arrow">↓</div>
-            <div className="demo-step">
-              <div className="demo-step-title">Deterministic Validation</div>
-              <div className={t.validation_result === 'passed' ? 'ok-text' : 'fail-text'}>
-                {t.validation_result === 'passed' ? '✓ PASSED' : '⚠ REJECTED'}
-              </div>
-              <div className="demo-step-desc">Confidence: {(t.confidence * 100).toFixed(0)}%</div>
-            </div>
+        <div className="demo-flow">
+          <div className="demo-step">
+            <span className="demo-step-kicker">Carrier page</span>
+            <p className="demo-step-desc">{demo.description}</p>
           </div>
-          {demo.extracted_shipment?.container_number && (
-            <div className="demo-extract">
-              Recovered shipment: <strong>{demo.extracted_shipment.container_number}</strong>
-              {' · '}{demo.extracted_shipment.shipping_line}
-              {' · '}{OCEAN_STATUS_LABELS[demo.extracted_shipment.status] || demo.extracted_shipment.status}
+          <div className="demo-step">
+            <span className="demo-step-kicker">Original extraction strategy</span>
+            <p className={t.original_strategy_status === 'passed' ? 'verdict ok' : 'verdict bad'}>
+              {t.original_strategy_status === 'passed' ? '✓ Passed' : '✗ Failed'}
+            </p>
+          </div>
+          {t.original_strategy_status === 'failed' && (
+            <div className="demo-step highlight">
+              <span className="demo-step-kicker">Self-healing recovery · {t.recovery_strategy}</span>
+              <p className={t.extraction_status === 'healed' ? 'verdict ok' : 'verdict bad'}>
+                {t.extraction_status === 'healed'
+                  ? `⚡ Recovered: ${t.recovered_fields.join(', ')}`
+                  : `⚠ ${t.validation_result}`}
+              </p>
             </div>
           )}
+          <div className="demo-step">
+            <span className="demo-step-kicker">Deterministic validation</span>
+            <p className={t.validation_result === 'passed' ? 'verdict ok' : 'verdict bad'}>
+              {t.validation_result === 'passed' ? '✓ Passed' : '⚠ Rejected'}
+              <span className="confidence-chip">{(t.confidence * 100).toFixed(0)}% confidence</span>
+            </p>
+          </div>
+          {demo.extracted_shipment?.container_number && (
+            <p className="demo-extract">
+              Recovered shipment{' '}
+              <strong>{demo.extracted_shipment.container_number}</strong>
+              {' · '}
+              {(demo.extracted_shipment.shipping_line || '').toUpperCase()}
+              {' · '}
+              {OCEAN_STATUS_LABELS[demo.extracted_shipment.status] || demo.extracted_shipment.status}
+            </p>
+          )}
         </div>
+      )}
+    </section>
+  )
+}
+
+function ShipmentList({ title, items, renderMeta, onSelect, emptyMessage }) {
+  return (
+    <section className="panel">
+      <h2 className="panel-title">{title}</h2>
+      {items.length === 0 ? (
+        <p className="empty-state">{emptyMessage}</p>
+      ) : (
+        <ul className="ship-list">
+          {items.map((item) => {
+            const key = item.container_number || item.tracking_number
+            return (
+              <li key={key}>
+                <button type="button" className="ship-row" onClick={() => onSelect(key)}>
+                  <span className="ship-row-num">{key}</span>
+                  <span className="ship-row-line">
+                    {(item.shipping_line || item.carrier || '').toUpperCase() || '—'}
+                  </span>
+                  <span className={`status-pill status-sm status-${item.status || 'unknown'}`}>
+                    <span className="status-pill-dot" aria-hidden="true" />
+                    {OCEAN_STATUS_LABELS[item.status] || item.status || 'Unknown'}
+                  </span>
+                  <span className="ship-row-meta">{renderMeta(item)}</span>
+                  <svg className="ship-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
       )}
     </section>
   )
@@ -272,6 +230,7 @@ export default function App() {
       .catch(() => setHealth({ status: 'offline', database: 'disconnected' }))
     fetchContainers()
     fetchParcels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchContainers = async () => {
@@ -293,7 +252,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchParcels()
+    if (mode === 'parcel') fetchParcels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterStatus])
 
   const handleTrackContainer = async (e) => {
@@ -309,6 +269,7 @@ export default function App() {
     try {
       const result = await trackContainer(containerNumber, selectedLine)
       setActiveContainer(result)
+      window.scrollTo({ top: 0 })
       fetchContainers()
     } catch (err) {
       setOceanError(err.message || 'Failed to track container shipment.')
@@ -338,6 +299,13 @@ export default function App() {
     }
   }
 
+  const resetToHome = () => {
+    setActiveContainer(null)
+    setOceanError(null)
+    setContainerNumber('')
+    window.scrollTo({ top: 0 })
+  }
+
   const handleDeleteParcel = async (tn, e) => {
     e.stopPropagation()
     if (!window.confirm(`Remove parcel ${tn} from history?`)) return
@@ -360,382 +328,275 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const handleSelectContainer = async (cntr, e) => {
-    if (e) e.stopPropagation()
+  const handleSelectContainer = async (cntr) => {
     try {
       const full = await getContainer(cntr)
       setActiveContainer(full)
       setContainerNumber(full.container_number || cntr)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      window.scrollTo({ top: 0 })
     } catch (err) {
       console.error('Failed to load container:', err)
     }
   }
 
-  return (
-    <div className="container">
-      {/* Header */}
-      <header className="app-header">
-        <div className="brand">
-          <div className="brand-icon">📦</div>
-          <div>
-            <h1 className="brand-title">StayTrace</h1>
-            <div className="brand-subtitle">Self-Healing Shipment Intelligence</div>
-          </div>
-        </div>
+  const containerId = activeContainer
+    ? activeContainer.container_number || activeContainer.tracking_number
+    : ''
 
-        <div className="system-status">
-          <span className={`status-dot ${health.status}`}></span>
-          <span>API: {health.status}</span>
+  return (
+    <div className="page">
+      <div className="bg-glow bg-glow-a" aria-hidden="true" />
+      <div className="bg-glow bg-glow-b" aria-hidden="true" />
+
+      <header className="topbar">
+        <button type="button" className="brand" onClick={resetToHome} aria-label="StayTrace home">
+          <BrandMark />
+          <span className="brand-name">StayTrace</span>
+          {!activeContainer && <span className="brand-tag">Shipment intelligence</span>}
+        </button>
+
+        <div className="topbar-right">
+          {activeContainer && (
+            <>
+              <code className="tracking-chip">{containerId}</code>
+              <button type="button" className="ghost-btn" onClick={resetToHome}>
+                New search
+              </button>
+            </>
+          )}
+          <span className="health-pill" title={`API ${health.status} · Database ${health.database ?? 'unknown'}`}>
+            <span className={`health-dot ${health.status}`} aria-hidden="true" />
+            API {health.status}
+          </span>
         </div>
       </header>
 
-      {/* ============ PRIMARY HERO: OCEAN SHIPMENT TRACKING ============ */}
-      <section className="hero-section">
-        <h2 className="hero-tagline">Track ocean freight across changing logistics systems.</h2>
-        <form className="track-form ocean-form" onSubmit={handleTrackContainer}>
-          <div className="input-group">
-            <input
-              type="text"
-              className="form-control form-control-lg"
-              placeholder="Container Number (e.g. MSCU1234566)"
-              value={containerNumber}
-              onChange={(e) => setContainerNumber(e.target.value)}
-              disabled={oceanLoading}
+      <main className="main">
+        {/* ================= HOME ================= */}
+        {!activeContainer && (
+          <div className="home fade-in">
+            <section className="hero">
+              <p className="hero-eyebrow">Shipment intelligence</p>
+              <h1 className="hero-title">
+                Track any shipment,
+                <br />
+                across every carrier.
+              </h1>
+              <p className="hero-sub">
+                Ocean containers and parcels — normalized from raw carrier sources with a
+                self-healing extraction engine.
+              </p>
+
+              <TrackingSearch
+                value={containerNumber}
+                onChange={(e) => setContainerNumber(e.target.value)}
+                onSubmit={handleTrackContainer}
+                loading={oceanLoading}
+                placeholder="Enter container / tracking number"
+                options={SHIPPING_LINES}
+                selectValue={selectedLine}
+                onSelectChange={(e) => setSelectedLine(e.target.value)}
+                buttonLabel={oceanLoading ? 'Tracking' : 'Track'}
+              />
+
+              <p className="carrier-marquee" aria-label="Supported shipping lines">
+                {LINE_MARQUEE.join(' · ')}
+              </p>
+
+              <div className="hero-secondary">
+                Tracking an individual package?
+                <button type="button" className="link-btn" onClick={() => setMode(mode === 'parcel' ? 'ocean' : 'parcel')}>
+                  {mode === 'parcel' ? 'Hide parcel tracking' : 'Track a parcel'}
+                </button>
+              </div>
+
+              {mode === 'parcel' && (
+                <div className="parcel-panel slide-down">
+                  <TrackingSearch
+                    value={trackingNumber}
+                    onChange={(e) => setTrackingNumber(e.target.value)}
+                    onSubmit={handleTrackParcel}
+                    loading={parcelLoading}
+                    placeholder="Enter tracking number (e.g. 94001…, 1Z999…)"
+                    options={CARRIERS}
+                    selectValue={selectedCarrier}
+                    onSelectChange={(e) => setSelectedCarrier(e.target.value)}
+                    buttonLabel={parcelLoading ? 'Tracking' : 'Track'}
+                    size="md"
+                  />
+
+                  {activeParcel && (
+                    <article className="parcel-result rise">
+                      <ShipmentHeader
+                        number={activeParcel.tracking_number}
+                        line={(activeParcel.carrier || 'Carrier unknown').toUpperCase()}
+                        status={activeParcel.status}
+                      />
+                      <ShipmentStats
+                        items={[
+                          { label: 'Origin / Sender', value: activeParcel.sender_address || 'Not available', muted: !activeParcel.sender_address },
+                          { label: 'Destination', value: activeParcel.recipient_address || 'Not available', muted: !activeParcel.recipient_address },
+                          { label: 'Estimated delivery', value: activeParcel.estimated_delivery || 'Pending', muted: !activeParcel.estimated_delivery },
+                          { label: 'Service', value: activeParcel.service_type || 'Standard' },
+                          { label: 'Weight', value: activeParcel.weight ? `${activeParcel.weight} kg` : 'N/A', muted: !activeParcel.weight },
+                          { label: 'Last updated', value: activeParcel.updated_at || 'Just now' },
+                        ]}
+                      />
+                      <Timeline events={activeParcel.events} />
+                    </article>
+                  )}
+
+                  {parcelError && (
+                    <div className="alert" role="alert">
+                      <span>{parcelError}</span>
+                      <button type="button" className="ghost-btn" onClick={() => handleTrackParcel()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+
+                  {parcelsList.length > 0 && (
+                    <div className="parcel-history">
+                      <div className="parcel-history-head">
+                        <h3 className="mini-title">Recent parcels</h3>
+                        <select
+                          className="filter-select"
+                          value={filterStatus}
+                          onChange={(e) => setFilterStatus(e.target.value)}
+                          aria-label="Filter parcels by status"
+                        >
+                          <option value="all">All statuses</option>
+                          <option value="in_transit">In transit</option>
+                          <option value="out_for_delivery">Out for delivery</option>
+                          <option value="delivered">Delivered</option>
+                          <option value="pre_transit">Pre-transit</option>
+                          <option value="exception">Exception</option>
+                        </select>
+                      </div>
+                      <ul className="ship-list">
+                        {parcelsList.map((p) => (
+                          <li key={p.tracking_number}>
+                            <div
+                              className="ship-row"
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => handleSelectParcel(p)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  handleSelectParcel(p)
+                                }
+                              }}
+                            >
+                              <span className="ship-row-num">{p.tracking_number}</span>
+                              <span className="ship-row-line">{(p.carrier || '').toUpperCase()}</span>
+                              <span className={`status-pill status-sm status-${p.status || 'unknown'}`}>
+                                <span className="status-pill-dot" aria-hidden="true" />
+                                {p.status ? p.status.replace('_', ' ') : 'unknown'}
+                              </span>
+                              <span className="ship-row-meta">{p.updated_at}</span>
+                              <svg className="ship-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="m9 18 6-6-6-6" />
+                              </svg>
+                            </div>
+                            <button
+                              type="button"
+                              className="danger-btn"
+                              aria-label={`Remove parcel ${p.tracking_number}`}
+                              onClick={(e) => handleDeleteParcel(p.tracking_number, e)}
+                            >
+                              Remove
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {oceanLoading && (
+              <section className="loading-strip" role="status" aria-live="polite">
+                <span className="spinner spinner-dark" />
+                Locating shipment and extracting checkpoints…
+              </section>
+            )}
+
+            {oceanError && (
+              <div className="alert" role="alert">
+                <span>{oceanError}</span>
+                <button type="button" className="ghost-btn" onClick={() => handleTrackContainer()}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            <SelfHealingDemo onNotify={setOceanError} />
+
+            <ShipmentList
+              title="Recent ocean shipments"
+              items={containersList}
+              emptyMessage="No tracked ocean shipments yet. Enter a container number above to begin."
+              onSelect={handleSelectContainer}
+              renderMeta={(c) =>
+                `${c.origin_port || '?'} → ${c.destination_port || '?'}${c.updated_at ? ` · ${c.updated_at}` : ''}`
+              }
             />
           </div>
-
-          <select
-            className="form-control carrier-select carrier-select-lg"
-            value={selectedLine}
-            onChange={(e) => setSelectedLine(e.target.value)}
-            disabled={oceanLoading}
-          >
-            {SHIPPING_LINES.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-
-          <button type="submit" className="btn btn-primary btn-primary-lg" disabled={oceanLoading}>
-            {oceanLoading ? 'Tracking...' : 'Track Shipment'}
-          </button>
-        </form>
-
-        <div className="hero-secondary">
-          Tracking an individual package?
-          <button className="btn-link" onClick={() => setMode(mode === 'parcel' ? 'ocean' : 'parcel')}>
-            {mode === 'parcel' ? 'Hide Parcel Tracking ▴' : 'Track Parcel ▾'}
-          </button>
-        </div>
-      </section>
-
-      {/* ============ SECONDARY: PARCEL TRACKING (collapsible) ============ */}
-      {mode === 'parcel' && (
-        <section className="track-card parcel-secondary">
-          <h3 className="card-title-sm">Individual Package Tracking</h3>
-          <form className="track-form" onSubmit={handleTrackParcel}>
-            <div className="input-group">
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Enter tracking number (e.g. 9400100000000000000000, 1Z999...)"
-                value={trackingNumber}
-                onChange={(e) => setTrackingNumber(e.target.value)}
-                disabled={parcelLoading}
-              />
-            </div>
-
-            <select
-              className="form-control carrier-select"
-              value={selectedCarrier}
-              onChange={(e) => setSelectedCarrier(e.target.value)}
-              disabled={parcelLoading}
-            >
-              {CARRIERS.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-
-            <button type="submit" className="btn btn-primary" disabled={parcelLoading}>
-              {parcelLoading ? 'Tracking...' : 'Track Package'}
-            </button>
-          </form>
-        </section>
-      )}
-
-      {/* Ocean error */}
-      {oceanError && (
-        <div className="alert">
-          <div className="alert-message">
-            <strong>Error: </strong> {oceanError}
-          </div>
-          <button className="btn btn-secondary" onClick={() => handleTrackContainer()}>
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* ============ OCEAN SHIPMENT RESULT ============ */}
-      {activeContainer && (
-        <section className="results-card ocean-results">
-          <ScraperHealthPanel shipment={activeContainer} />
-
-          <div className="parcel-header">
-            <div className="tracking-info">
-              <div className="carrier-tag">{(activeContainer.shipping_line || 'Shipping Line').toUpperCase()}</div>
-              <div className="tracking-num">{activeContainer.container_number || activeContainer.tracking_number}</div>
-            </div>
-            <div className={`status-badge ${activeContainer.status}`}>
-              {OCEAN_STATUS_LABELS[activeContainer.status] || activeContainer.status || 'Unknown'}
-            </div>
-          </div>
-
-          {/* Route visualization */}
-          <OceanRoute shipment={activeContainer} />
-
-          {/* Details Grid */}
-          <div className="details-grid">
-            <div className="detail-item">
-              <span className="detail-label">Vessel</span>
-              <span className="detail-value">{activeContainer.vessel_name || 'Not specified'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Voyage</span>
-              <span className="detail-value">{activeContainer.voyage_number || 'Not specified'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Last Known Location</span>
-              <span className="detail-value">{activeContainer.current_location || activeContainer.destination_port || 'Not specified'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">ETA at Destination</span>
-              <span className="detail-value">{activeContainer.estimated_arrival || 'Pending'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Actual Departure</span>
-              <span className="detail-value">{activeContainer.actual_departure || 'Not departed'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Last Updated</span>
-              <span className="detail-value">{activeContainer.updated_at || 'Just now'}</span>
-            </div>
-          </div>
-
-          {/* Event Timeline */}
-          <h3 className="timeline-title">Shipment Timeline ({activeContainer.events?.length || 0} Checkpoints)</h3>
-          {activeContainer.events && activeContainer.events.length > 0 ? (
-            <div className="timeline">
-              {activeContainer.events.map((ev, idx) => (
-                <div key={idx} className="timeline-item">
-                  <div className="timeline-dot"></div>
-                  <div className="timeline-time">{ev.timestamp}</div>
-                  <div className="timeline-desc">{ev.description || ev.status}</div>
-                  {(ev.vessel || ev.voyage) && (
-                    <div className="timeline-loc">🚢 {ev.vessel || ''}{ev.voyage ? ` · Voy ${ev.voyage}` : ''}</div>
-                  )}
-                  {ev.location && !ev.vessel && <div className="timeline-loc">📍 {ev.location}{ev.location_code ? ` (${ev.location_code})` : ''}</div>}
-                  {ev.location && ev.vessel && <div className="timeline-loc">📍 {ev.location}{ev.location_code ? ` (${ev.location_code})` : ''}</div>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="empty-state">No checkpoint events recorded yet for this shipment.</p>
-          )}
-        </section>
-      )}
-
-      {/* ============ SELF-HEALING DEMO ============ */}
-      <SelfHealingDemo />
-
-      {/* ============ CONTAINER HISTORY ============ */}
-      <section className="history-card">
-        <div className="history-header">
-          <h2 className="card-title" style={{ margin: 0 }}>Recent Ocean Shipments</h2>
-          <button className="btn btn-secondary" onClick={fetchContainers} style={{ padding: '0.4rem 0.8rem' }}>
-            ↻
-          </button>
-        </div>
-
-        {containersList.length > 0 ? (
-          <table className="parcels-table">
-            <thead>
-              <tr>
-                <th>Container</th>
-                <th>Line</th>
-                <th>Status</th>
-                <th>Route</th>
-                <th>Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {containersList.map((c) => (
-                <tr
-                  key={c.container_number || c.tracking_number}
-                  className="clickable-row"
-                  onClick={() => handleSelectContainer(c.container_number || c.tracking_number)}
-                >
-                  <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{c.container_number || c.tracking_number}</td>
-                  <td style={{ textTransform: 'uppercase' }}>{c.shipping_line || c.carrier}</td>
-                  <td>
-                    <span className={`status-badge ${c.status}`}>
-                      {OCEAN_STATUS_LABELS[c.status] || c.status}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: '0.85rem' }}>
-                    {c.origin_port || '?'} → {c.destination_port || '?'}
-                  </td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{c.updated_at}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <p className="empty-state">No tracked ocean shipments yet. Enter a container number above to begin.</p>
         )}
-      </section>
 
-      {/* ============ PARCEL HISTORY (existing feature) ============ */}
-      {mode === 'parcel' && (
-        <section className="history-card">
-          <div className="history-header">
-            <h2 className="card-title" style={{ margin: 0 }}>Recent Tracked Parcels</h2>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <select
-                className="form-control"
-                style={{ width: '140px', padding: '0.4rem 0.6rem' }}
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-              >
-                <option value="all">All Statuses</option>
-                <option value="in_transit">In Transit</option>
-                <option value="out_for_delivery">Out for Delivery</option>
-                <option value="delivered">Delivered</option>
-                <option value="pre_transit">Pre-Transit</option>
-                <option value="exception">Exception</option>
-              </select>
-              <button className="btn btn-secondary" onClick={fetchParcels} style={{ padding: '0.4rem 0.8rem' }}>
-                ↻
-              </button>
-            </div>
+        {/* ================= RESULT WORKSPACE ================= */}
+        {activeContainer && (
+          <div className="workspace fade-in">
+            <ShipmentHeader
+              number={containerId}
+              line={(activeContainer.shipping_line || 'Shipping line').toUpperCase()}
+              status={activeContainer.status}
+              labels={OCEAN_STATUS_LABELS}
+            />
+
+            <RouteProgress shipment={activeContainer} />
+
+            <ExtractionHealth shipment={activeContainer} />
+
+            <ShipmentStats
+              items={[
+                { label: 'Vessel', value: activeContainer.vessel_name || 'Not available', muted: !activeContainer.vessel_name },
+                { label: 'Voyage', value: activeContainer.voyage_number || 'Not available', muted: !activeContainer.voyage_number },
+                { label: 'Current location', value: activeContainer.current_location || activeContainer.destination_port || 'Pending', muted: !(activeContainer.current_location || activeContainer.destination_port) },
+                { label: 'ETA at destination', value: activeContainer.estimated_arrival || 'Pending', muted: !activeContainer.estimated_arrival },
+                { label: 'Actual departure', value: activeContainer.actual_departure || 'Not departed', muted: !activeContainer.actual_departure },
+                { label: 'Last updated', value: activeContainer.updated_at || 'Just now' },
+              ]}
+            />
+
+            <section className="panel timeline-panel">
+              <div className="panel-head">
+                <h2 className="panel-title">Tracking history</h2>
+                <span className="count-chip">{activeContainer.events?.length || 0} checkpoints</span>
+              </div>
+              <Timeline events={activeContainer.events} />
+            </section>
+
+            {containersList.length > 0 && (
+              <ShipmentList
+                title="Other tracked shipments"
+                items={containersList.filter(
+                  (c) => (c.container_number || c.tracking_number) !== containerId
+                )}
+                emptyMessage=""
+                onSelect={handleSelectContainer}
+                renderMeta={(c) => `${c.origin_port || '?'} → ${c.destination_port || '?'}`}
+              />
+            )}
           </div>
+        )}
+      </main>
 
-          {parcelsList.length > 0 ? (
-            <table className="parcels-table">
-              <thead>
-                <tr>
-                  <th>Tracking Number</th>
-                  <th>Carrier</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parcelsList.map((p) => (
-                  <tr
-                    key={p.tracking_number}
-                    className="clickable-row"
-                    onClick={() => handleSelectParcel(p)}
-                  >
-                    <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{p.tracking_number}</td>
-                    <td style={{ textTransform: 'uppercase' }}>{p.carrier}</td>
-                    <td>
-                      <span className={`status-badge ${p.status}`}>
-                        {p.status ? p.status.replace('_', ' ') : 'unknown'}
-                      </span>
-                    </td>
-                    <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{p.updated_at}</td>
-                    <td>
-                      <button
-                        className="btn btn-danger"
-                        onClick={(e) => handleDeleteParcel(p.tracking_number, e)}
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="empty-state">No tracked parcels in database. Enter a tracking number above to begin.</p>
-          )}
-        </section>
-      )}
-
-      {/* Active Parcel Details (existing experience) */}
-      {mode === 'parcel' && activeParcel && (
-        <section className="results-card">
-          <div className="parcel-header">
-            <div className="tracking-info">
-              <div className="carrier-tag">{activeParcel.carrier || 'Carrier Unknown'}</div>
-              <div className="tracking-num">{activeParcel.tracking_number}</div>
-            </div>
-            <div className={`status-badge ${activeParcel.status}`}>
-              {activeParcel.status ? activeParcel.status.replace('_', ' ') : 'Unknown'}
-            </div>
-          </div>
-
-          <div className="details-grid">
-            <div className="detail-item">
-              <span className="detail-label">Origin / Sender</span>
-              <span className="detail-value">{activeParcel.sender_address || 'Not specified'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Destination</span>
-              <span className="detail-value">{activeParcel.recipient_address || 'Not specified'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Estimated Delivery</span>
-              <span className="detail-value">{activeParcel.estimated_delivery || 'Pending'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Service</span>
-              <span className="detail-value">{activeParcel.service_type || 'Standard'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Weight</span>
-              <span className="detail-value">{activeParcel.weight ? `${activeParcel.weight} kg` : 'N/A'}</span>
-            </div>
-            <div className="detail-item">
-              <span className="detail-label">Last Updated</span>
-              <span className="detail-value">{activeParcel.updated_at || 'Just now'}</span>
-            </div>
-          </div>
-
-          <h3 className="timeline-title">Tracking History ({activeParcel.events?.length || 0} Checkpoints)</h3>
-          {activeParcel.events && activeParcel.events.length > 0 ? (
-            <div className="timeline">
-              {activeParcel.events.map((ev, idx) => (
-                <div key={idx} className="timeline-item">
-                  <div className="timeline-dot"></div>
-                  <div className="timeline-time">{ev.timestamp}</div>
-                  <div className="timeline-desc">{ev.description || ev.status}</div>
-                  {ev.location && <div className="timeline-loc">📍 {ev.location}</div>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="empty-state">No checkpoint events recorded yet for this shipment.</p>
-          )}
-        </section>
-      )}
-
-      {/* Parcel error */}
-      {mode === 'parcel' && parcelError && (
-        <div className="alert">
-          <div className="alert-message">
-            <strong>Error: </strong> {parcelError}
-          </div>
-          <button className="btn btn-secondary" onClick={() => handleTrackParcel()}>
-            Retry
-          </button>
-        </div>
-      )}
+      <footer className="footer">
+        StayTrace — self-healing shipment intelligence
+      </footer>
     </div>
   )
 }
