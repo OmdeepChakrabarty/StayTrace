@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from api.main import create_app
+from api.main import create_app, TrackingService
+from db.database import init_db
 from scraper.brightdata import BrightDataClient
 
 
@@ -102,3 +103,41 @@ def test_self_healing_demo_endpoint(ocean_test_server):
     data_post = resp_post.json()
     assert data_post["demo_scenario"] == "ambiguous"
     assert data_post["telemetry"]["validation_result"] == "rejected_ambiguous"
+
+
+def test_track_container_live_fetch_routes_to_official_source_and_rejects_empty_page(tmp_path):
+    """
+    Deterministic regression for the live ocean fetch path (no network).
+    Simulates an official carrier page shell that carries no shipment data:
+    - must route to the official carrier source (never Google)
+    - self-healing must safely reject the empty page
+    - shipping line from routing must still be stamped on the record
+    """
+    db_file = str(tmp_path / "live_path.db")
+    init_db(db_path=db_file)
+
+    mock_client = MagicMock(spec=BrightDataClient)
+    # Official CMA CGM search page shell: no tracking results in HTML
+    mock_client.build_tracking_url.return_value = (
+        "https://www.cma-cgm.com/ebusiness/tracking/search?SearchBy=Container&Reference=CMAU0600020"
+    )
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "<html><body><div id='searchboxId'></div></body></html>"
+    mock_client.unlock_url.return_value = mock_resp
+
+    svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
+    container, status_code = svc.track_container("CMAU0600020", shipping_line="cma_cgm", fetch_live=True)
+
+    # Routing went to the official source, never Google
+    requested_url = mock_client.build_tracking_url.call_args[0][0]
+    assert "google.com" not in requested_url
+
+    # Safe rejection recorded, no fabricated data
+    assert container["container_number"] == "CMAU0600020"
+    assert container["status"] == "unknown"
+    assert container["healing_status"] == "failed"
+    assert container["events"] == []
+    # Shipping line inferred by routing is stamped even when extractor returns none
+    assert container["shipping_line"] == "cma_cgm"
+    assert container["carrier"] == "cma_cgm"

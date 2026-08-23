@@ -134,7 +134,7 @@ class TrackingService:
             telemetry_dict = telemetry.to_dict()
             incoming_container["container_number"] = norm_container
             incoming_container["tracking_number"] = norm_container
-            if inferred_line != "other" and not incoming_container.get("shipping_line"):
+            if inferred_line != "other" and incoming_container.get("shipping_line") in (None, "", "other"):
                 incoming_container["shipping_line"] = inferred_line
         elif raw_payload:
             # Ingestion from provided structured dictionary
@@ -142,7 +142,7 @@ class TrackingService:
             if not incoming_container.get("container_number"):
                 incoming_container["container_number"] = norm_container
                 incoming_container["tracking_number"] = norm_container
-            if inferred_line != "other" and not incoming_container.get("shipping_line"):
+            if inferred_line != "other" and incoming_container.get("shipping_line") in (None, "", "other"):
                 incoming_container["shipping_line"] = inferred_line
         elif fetch_live:
             # Fetch tracking through Bright Data Web Unlocker + Self-Healing Extraction
@@ -156,7 +156,7 @@ class TrackingService:
                 telemetry_dict = telemetry.to_dict()
                 incoming_container["container_number"] = norm_container
                 incoming_container["tracking_number"] = norm_container
-                if inferred_line != "other" and not incoming_container.get("shipping_line"):
+                if inferred_line != "other" and incoming_container.get("shipping_line") in (None, "", "other"):
                     incoming_container["shipping_line"] = inferred_line
 
                 log_scrape(norm_container, inferred_line, "success", db_path=self.db_path)

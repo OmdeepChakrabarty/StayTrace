@@ -10,8 +10,9 @@ import os
 import time
 import requests
 from typing import Any, Dict, List, Optional
-from pipeline.normalize import normalize_parcel, normalize_carrier, normalize_tracking_number
+from pipeline.normalize import normalize_parcel, normalize_carrier, normalize_tracking_number, normalize_shipping_line
 from scraper.validator import is_valid_tracking_number, ValidationError
+from scraper.ocean_sources import default_ocean_registry, UnsupportedOceanCarrierError
 
 
 class BrightDataError(Exception):
@@ -44,6 +45,7 @@ class BrightDataNetworkError(BrightDataError):
     pass
 
 
+# Official Parcel Carrier Tracking URLs
 CARRIER_TRACKING_URLS = {
     "usps": "https://tools.usps.com/go/TrackConfirmAction?tLabels={tracking_number}",
     "fedex": "https://www.fedex.com/fedextrack/?trknbr={tracking_number}",
@@ -62,11 +64,11 @@ class BrightDataClient:
         api_key: Optional[str] = None,
         zone: Optional[str] = None,
         endpoint: Optional[str] = None,
-        timeout: int = 30,
+        timeout: int = 60,
         max_retries: int = 3,
         session: Optional[requests.Session] = None,
     ):
-        self.api_key = api_key or os.environ.get("BRIGHTDATA_API_KEY", "")
+        self.api_key = api_key if api_key is not None else os.environ.get("BRIGHTDATA_API_KEY", "")
         self.zone = zone or os.environ.get("BRIGHTDATA_ZONE", "web_unlocker")
         self.endpoint = (endpoint or os.environ.get("BRIGHTDATA_ENDPOINT", "https://api.brightdata.com")).rstrip("/")
         self.timeout = timeout
@@ -74,14 +76,28 @@ class BrightDataClient:
         self.session = session or requests.Session()
 
     def build_tracking_url(self, carrier: str, tracking_number: str) -> str:
-        """Construct the direct tracking webpage URL for a given carrier and tracking number."""
+        """
+        Construct official carrier tracking webpage URL for parcels or ocean containers.
+        Routes to official source adapters. No Google search fallback.
+        """
         norm_carrier = normalize_carrier(carrier)
         norm_tracking = normalize_tracking_number(tracking_number)
 
-        template = CARRIER_TRACKING_URLS.get(norm_carrier)
-        if template:
-            return template.format(tracking_number=norm_tracking)
-        return f"https://www.google.com/search?q={norm_carrier}+{norm_tracking}+tracking"
+        # 1. Check official parcel carrier URLs
+        if norm_carrier in CARRIER_TRACKING_URLS:
+            return CARRIER_TRACKING_URLS[norm_carrier].format(tracking_number=norm_tracking)
+
+        # 2. Check official ocean carrier registry
+        ocean_adapter = default_ocean_registry.get_adapter(carrier) or default_ocean_registry.get_adapter(norm_tracking)
+        if ocean_adapter:
+            return ocean_adapter.build_tracking_url(norm_tracking)
+
+        raise ValidationError(f"Unsupported carrier tracking source '{carrier}'. No official tracking source configured.")
+
+    def build_ocean_tracking_url(self, shipping_line: str, container_number: str) -> str:
+        """Construct official ocean carrier tracking URL via OceanSourceRegistry."""
+        norm_tracking = normalize_tracking_number(container_number)
+        return default_ocean_registry.build_tracking_url(shipping_line, norm_tracking)
 
     def _get_headers(self) -> Dict[str, str]:
         """Build request headers with authorization."""
