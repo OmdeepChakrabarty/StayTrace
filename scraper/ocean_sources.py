@@ -7,6 +7,7 @@ Extensible, modular, zero hardcoded secrets, no Google search fallback.
 from __future__ import annotations
 
 import abc
+import json
 import re
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -22,6 +23,9 @@ class OceanSourceAdapter(abc.ABC):
     carrier_id: str
     display_name: str
     supported_prefixes: Tuple[str, ...]
+    # Carriers whose official source requires a real session-based browser flow
+    # (CSRF token + cookie bound form POST) instead of a stateless page fetch.
+    requires_browser: bool = False
 
     def __init__(self) -> None:
         pass
@@ -30,6 +34,21 @@ class OceanSourceAdapter(abc.ABC):
     def build_tracking_url(self, container_number: str) -> str:
         """Construct the official carrier tracking URL for a given container number."""
         pass
+
+    def get_browser_plan(self, container_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Declarative plan describing how to drive this carrier's official page in
+        a Scraping Browser session. Only defined when requires_browser is True.
+        """
+        return None
+
+    def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
+        """
+        Optionally parse a rendered official page into the canonical raw
+        container schema (pre-normalization). Return None to fall back to the
+        generic self-healing extraction engine.
+        """
+        return None
 
     def get_request_headers(self) -> Dict[str, str]:
         """Optional HTTP headers specific to this carrier."""
@@ -67,14 +86,109 @@ class MaerskOceanAdapter(OceanSourceAdapter):
 
 
 class CMACGMOceanAdapter(OceanSourceAdapter):
-    """CMA CGM Group (including APL, ANL) official tracking adapter."""
+    """
+    CMA CGM Group (including APL, ANL) official tracking adapter.
+
+    The official search page serves results only after a session-bound form
+    POST (anti-forgery token + cookies), so it requires a Scraping Browser
+    session: GET the page, fill the reference field, submit within the same
+    session, then extract the rendered result HTML.
+    """
     carrier_id = "cma_cgm"
     display_name = "CMA CGM Group"
     supported_prefixes = ("CMAU", "CGMU", "APLU", "ANLU")
+    requires_browser = True
 
     def build_tracking_url(self, container_number: str) -> str:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
         return f"https://www.cma-cgm.com/ebusiness/tracking/search?SearchBy=Container&Reference={clean}"
+
+    def get_browser_plan(self, container_number: str) -> Dict[str, Any]:
+        clean = re.sub(r"\s+", "", container_number.strip().upper())
+        # The official page embeds results server-side as:
+        #   options.containerReference = '<REF>';
+        # Matching that rendered state avoids false positives from URL query
+        # strings or anti-bot interstitials echoing the searched reference.
+        safe_ref = re.escape(clean)
+        return {
+            "start_url": self.build_tracking_url(clean),
+            # Official search form: <form action="/ebusiness/tracking/search" method="post">
+            "ready_selector": "#Reference",
+            "fill": {"selector": "#Reference", "value": clean},
+            "submit": "#btnTracking",
+            "success_js": (
+                "/containerReference\\s*=\\s*'" + safe_ref + "'/"
+                ".test(document.documentElement.outerHTML)"
+            ),
+            "max_page_wait": 90.0,
+            "overall_timeout": 300.0,
+        }
+
+    def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse CMA CGM's server-embedded tracking state (options.responseData)
+        into the canonical raw container schema. The official page injects the
+        full structured result as JSON inside an inline script.
+        """
+        match = re.search(r"options\.responseData\s*=\s*'(.*?)'\s*;", html, re.S)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(1))
+        except (ValueError, TypeError):
+            return None
+
+        if not isinstance(data, dict):
+            return None
+        if data.get("NotFoundContainer") or not data.get("ContainerReference"):
+            return None
+
+        moves: List[Dict[str, Any]] = []
+        for key in ("PastMoves", "CurrentMoves", "ProvisionalMoves"):
+            for move in data.get(key) or []:
+                if isinstance(move, dict):
+                    moves.append(move)
+
+        def _first_vessel_move() -> Optional[Dict[str, Any]]:
+            for move in moves:
+                if move.get("Vessel"):
+                    return move
+            return None
+
+        vessel_move = _first_vessel_move()
+        current_move = (data.get("CurrentMoves") or [{}])[0] if data.get("CurrentMoves") else {}
+
+        events = [
+            {
+                "timestamp": move.get("Date"),
+                "status": move.get("StatusDescription"),
+                "description": move.get("StatusDescription"),
+                "location": move.get("Location"),
+                "location_code": move.get("LocationCode"),
+                "vessel": move.get("Vessel") or None,
+                "voyage": move.get("Voyage") or None,
+                "source": "carrier",
+            }
+            for move in moves
+        ]
+
+        parsed: Dict[str, Any] = {
+            "container_number": data.get("ContainerReference"),
+            "tracking_number": data.get("ContainerReference"),
+            "shipping_line": self.carrier_id,
+            "status": (current_move or {}).get("StatusDescription")
+            or (moves[-1].get("StatusDescription") if moves else None),
+            "vessel_name": (vessel_move or {}).get("Vessel"),
+            "voyage_number": (vessel_move or {}).get("Voyage"),
+            "origin_port": data.get("PlaceOfLoading") or data.get("POL"),
+            "origin_port_code": data.get("POL") or None,
+            "destination_port": data.get("LastDischargePort") or data.get("POD"),
+            "destination_port_code": data.get("POD") or None,
+            "estimated_departure": data.get("POLDate"),
+            "estimated_arrival": data.get("EstimatedTimeOfArrival") or data.get("PODDate"),
+            "events": events,
+        }
+        return parsed
 
 
 class COSCOOceanAdapter(OceanSourceAdapter):

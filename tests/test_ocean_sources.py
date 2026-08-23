@@ -94,3 +94,66 @@ def test_registry_catalog_completeness():
         "msc", "maersk", "cma_cgm", "cosco", "hapag_lloyd",
         "one", "evergreen", "zim", "yang_ming", "hmm"
     }
+
+
+# ---------------------------------------------------------------------------
+# CMA CGM structured response parsing (Scraping Browser path)
+# ---------------------------------------------------------------------------
+
+import json as _json
+
+SYNTHETIC_RESPONSE_DATA = {
+    "ContainerReference": "CMAU0600020",
+    "NotFoundContainer": None,
+    "PlaceOfLoading": "LEKKI, LA (NG)",
+    "LastDischargePort": "QINGDAO (CN)",
+    "POL": "NGLKK",
+    "POD": "CNTAO",
+    "POLDate": "2026-08-24T18:00:00",
+    "EstimatedTimeOfArrival": "2026-09-27T17:00:00",
+    "CurrentMoves": [
+        {"Date": "2026-08-08T11:57:00", "StatusDescription": "Ready to be loaded",
+         "Location": "LEKKI, LA", "LocationCode": "NGLKK", "Vessel": "", "Voyage": ""}
+    ],
+    "ProvisionalMoves": [
+        {"Date": "2026-08-24T18:00:00", "StatusDescription": "Planned Vessel departure",
+         "Location": "LEKKI, LA", "LocationCode": "NGLKK",
+         "Vessel": "TEST VESSEL", "Voyage": "0W10JE1MA"},
+    ],
+    "PastMoves": [
+        {"Date": "2026-07-13T10:37:01", "StatusDescription": "Gate out empty from depot",
+         "Location": "LEKKI, LA", "LocationCode": "NGLKK", "Vessel": "", "Voyage": ""},
+    ],
+}
+
+
+def _synthetic_html():
+    embedded = _json.dumps(SYNTHETIC_RESPONSE_DATA).replace("'", "\\'")
+    return f"<html><script>options.responseData = '{embedded}';</script></html>"
+
+
+def test_cma_cgm_parse_official_response_maps_structured_state():
+    adapter = default_ocean_registry.get_adapter("cma_cgm")
+    parsed = adapter.parse_official_response(_synthetic_html())
+    assert parsed is not None
+    assert parsed["container_number"] == "CMAU0600020"
+    assert parsed["origin_port_code"] == "NGLKK"
+    assert parsed["destination_port_code"] == "CNTAO"
+    assert parsed["vessel_name"] == "TEST VESSEL"
+    assert parsed["voyage_number"] == "0W10JE1MA"
+    assert len(parsed["events"]) == 3
+
+
+def test_cma_cgm_parse_official_response_returns_none_for_shell_page():
+    adapter = default_ocean_registry.get_adapter("cma_cgm")
+    # Search-form shell without embedded state must fall back to self-healing
+    assert adapter.parse_official_response("<html><body><div id='searchboxId'></div></body></html>") is None
+    # Explicit carrier not-found marker must yield no fabricated data
+    not_found = _json.dumps({**SYNTHETIC_RESPONSE_DATA, "NotFoundContainer": True})
+    html = f"<html><script>options.responseData = '{not_found}';</script></html>"
+    assert adapter.parse_official_response(html) is None
+
+
+def test_ready_to_be_loaded_normalizes_to_gate_in():
+    from pipeline.normalize import normalize_ocean_status
+    assert normalize_ocean_status("Ready to be loaded") == "gate_in"

@@ -105,33 +105,37 @@ def test_self_healing_demo_endpoint(ocean_test_server):
     assert data_post["telemetry"]["validation_result"] == "rejected_ambiguous"
 
 
-def test_track_container_live_fetch_routes_to_official_source_and_rejects_empty_page(tmp_path):
+def test_track_container_live_fetch_routes_to_official_source_and_rejects_empty_page(tmp_path, monkeypatch):
     """
     Deterministic regression for the live ocean fetch path (no network).
-    Simulates an official carrier page shell that carries no shipment data:
-    - must route to the official carrier source (never Google)
+    CMA CGM requires the Scraping Browser path; simulate an official carrier
+    page shell that carries no shipment data:
+    - must route through the browser-session helper to the official source
     - self-healing must safely reject the empty page
     - shipping line from routing must still be stamped on the record
     """
     db_file = str(tmp_path / "live_path.db")
     init_db(db_path=db_file)
 
-    mock_client = MagicMock(spec=BrightDataClient)
-    # Official CMA CGM search page shell: no tracking results in HTML
-    mock_client.build_tracking_url.return_value = (
-        "https://www.cma-cgm.com/ebusiness/tracking/search?SearchBy=Container&Reference=CMAU0600020"
-    )
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = "<html><body><div id='searchboxId'></div></body></html>"
-    mock_client.unlock_url.return_value = mock_resp
+    requested_urls = []
 
+    def fake_browser_fetch(adapter, container_number):
+        requested_urls.append(adapter.build_tracking_url(container_number))
+        # Official CMA CGM search page shell: no tracking results in HTML
+        return "<html><body><div id='searchboxId'></div></body></html>"
+
+    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", fake_browser_fetch)
+
+    mock_client = MagicMock(spec=BrightDataClient)
     svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
     container, status_code = svc.track_container("CMAU0600020", shipping_line="cma_cgm", fetch_live=True)
 
-    # Routing went to the official source, never Google
-    requested_url = mock_client.build_tracking_url.call_args[0][0]
-    assert "google.com" not in requested_url
+    # Routing went to the official source, never Google; unlocker not used
+    assert requested_urls == [
+        "https://www.cma-cgm.com/ebusiness/tracking/search?SearchBy=Container&Reference=CMAU0600020"
+    ]
+    assert "google.com" in str(mock_client.mock_calls) or not mock_client.unlock_url.called
+    assert not any("google.com" in str(c) for c in mock_client.mock_calls)
 
     # Safe rejection recorded, no fabricated data
     assert container["container_number"] == "CMAU0600020"
@@ -141,3 +145,31 @@ def test_track_container_live_fetch_routes_to_official_source_and_rejects_empty_
     # Shipping line inferred by routing is stamped even when extractor returns none
     assert container["shipping_line"] == "cma_cgm"
     assert container["carrier"] == "cma_cgm"
+
+
+def test_track_container_unlocker_path_for_non_browser_carriers(tmp_path, monkeypatch):
+    """
+    Non-browser ocean carriers (e.g. Maersk) must keep using the stateless
+    Web Unlocker fetch path - browser sessions are reserved for carriers that
+    declare requires_browser.
+    """
+    db_file = str(tmp_path / "unlocker_path.db")
+    init_db(db_path=db_file)
+
+    def fail_browser_fetch(adapter, container_number):
+        raise AssertionError("browser session must not be used for non-browser carriers")
+
+    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", fail_browser_fetch)
+
+    mock_client = MagicMock(spec=BrightDataClient)
+    mock_client.build_tracking_url.return_value = "https://www.maersk.com/tracking/MAEU6284920"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "<html><body>shell</body></html>"
+    mock_client.unlock_url.return_value = mock_resp
+
+    svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
+    container, _ = svc.track_container("MAEU6284920", shipping_line="maersk", fetch_live=True)
+
+    assert mock_client.unlock_url.called
+    assert container["shipping_line"] == "maersk"

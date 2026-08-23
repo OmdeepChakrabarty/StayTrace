@@ -54,6 +54,11 @@ from scraper.validator import (
     validate_raw_payload,
     ValidationError,
 )
+from scraper.ocean_sources import default_ocean_registry
+from scraper.browser_session import (
+    fetch_carrier_page_via_browser,
+    BrowserSessionError,
+)
 from scraper.self_healing import (
     extract_with_self_healing,
     ExtractionTelemetry,
@@ -145,14 +150,40 @@ class TrackingService:
             if inferred_line != "other" and incoming_container.get("shipping_line") in (None, "", "other"):
                 incoming_container["shipping_line"] = inferred_line
         elif fetch_live:
-            # Fetch tracking through Bright Data Web Unlocker + Self-Healing Extraction
+            # Fetch tracking through Bright Data + Self-Healing Extraction.
+            # Ocean adapters flagged requires_browser (e.g. CMA CGM) need a real
+            # session-based browser flow against their official page; all other
+            # sources use the stateless Web Unlocker path.
+            ocean_adapter = (
+                default_ocean_registry.get_adapter(inferred_line)
+                or default_ocean_registry.get_adapter(norm_container)
+            )
             try:
-                target_url = self.client.build_tracking_url(inferred_line, norm_container)
-                response = self.client.unlock_url(target_url, format="raw")
-                page_html = response.text
+                if ocean_adapter is not None and ocean_adapter.requires_browser:
+                    page_html = fetch_carrier_page_via_browser(ocean_adapter, norm_container)
+                    # Structured parsing from the adapter when the official page
+                    # embeds machine-readable state; self-healing as fallback.
+                    parsed = ocean_adapter.parse_official_response(page_html)
+                else:
+                    target_url = self.client.build_tracking_url(inferred_line, norm_container)
+                    response = self.client.unlock_url(target_url, format="raw")
+                    page_html = response.text
+                    parsed = None
 
-                # Run self-healing extraction on unlocked carrier webpage
-                incoming_container, telemetry = extract_with_self_healing(page_html, shipment_type="ocean_container")
+                if parsed is not None:
+                    incoming_container = normalize_container_shipment(parsed)
+                    telemetry = ExtractionTelemetry()
+                    telemetry.extraction_status = "normal"
+                    telemetry.original_strategy_status = "passed"
+                    telemetry.validation_result = "passed"
+                    telemetry.confidence = 1.0
+                    telemetry.diagnostic_log.append(
+                        f"Parsed structured tracking state from official {inferred_line} source."
+                    )
+                else:
+                    # Run self-healing extraction on the carrier webpage
+                    incoming_container, telemetry = extract_with_self_healing(page_html, shipment_type="ocean_container")
+
                 telemetry_dict = telemetry.to_dict()
                 incoming_container["container_number"] = norm_container
                 incoming_container["tracking_number"] = norm_container
@@ -160,6 +191,9 @@ class TrackingService:
                     incoming_container["shipping_line"] = inferred_line
 
                 log_scrape(norm_container, inferred_line, "success", db_path=self.db_path)
+            except BrowserSessionError as e:
+                log_scrape(norm_container, inferred_line, "failed", error_message=str(e), db_path=self.db_path)
+                raise BrightDataError(str(e))
             except BrightDataNotFoundError as e:
                 log_scrape(norm_container, inferred_line, "not_found", error_message=str(e), db_path=self.db_path)
                 raise

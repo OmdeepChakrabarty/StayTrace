@@ -91,6 +91,7 @@ OCEAN_STATUS_KEYWORD_MAP: List[tuple[str, str]] = [
     (r"\b(transshipment|transshipped|transshipment hub|connecting vessel|trans-shipment)\b", "transshipment"),
     # Loaded on vessel / Underway
     (r"\b(vessel departure|departed port|underway|at sea|in transit|in_transit|sailing|en route)\b", "in_transit"),
+    (r"\b(ready to be loaded|ready for loading|awaiting vessel loading)\b", "gate_in"),
     (r"\b(loaded on vessel|laden on board|loaded onto vessel|vessel loaded|container loaded|loaded)\b", "loaded"),
     # Gate in at POL
     (r"\b(gate in|gate-in|container received|received at terminal|cy in|terminal in|received at pol)\b", "gate_in"),
