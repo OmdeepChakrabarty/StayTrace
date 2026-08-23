@@ -85,13 +85,29 @@ export async function trackContainer(containerNumber, shippingLine = null) {
     body.shipping_line = shippingLine
   }
 
-  const res = await fetch(`${API_BASE}/api/track/container`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60000)
+
+  let res
+  try {
+    res = await fetch(`${API_BASE}/api/track/container`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const error = new Error('SOURCE UNAVAILABLE — TRY AGAIN')
+      error.timedOut = true
+      throw error
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 
   const data = await res.json()
   if (!res.ok) {

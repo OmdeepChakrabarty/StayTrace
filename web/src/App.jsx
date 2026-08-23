@@ -197,7 +197,7 @@ function Stat({ label, value, mono }) {
   )
 }
 
-function ResultView({ shipment, onNewSearch }) {
+function ResultView({ shipment, onNewSearch, lastKnown }) {
   const number = shipment.container_number || shipment.tracking_number
   const status = OCEAN_STATUS_LABELS[shipment.status] || (shipment.status || 'UNKNOWN').toUpperCase()
 
@@ -205,7 +205,10 @@ function ResultView({ shipment, onNewSearch }) {
     <div className="result">
       <div className="result-top reveal" style={{ '--d': '0ms' }}>
         <div className="result-id">
-          <span className="result-line">{(shipment.shipping_line || '').toUpperCase()}</span>
+          <span className="result-line">
+            {(shipment.shipping_line || '').toUpperCase()}
+            {lastKnown && <span className="last-known-tag">LAST KNOWN · LIVE SOURCE UNAVAILABLE</span>}
+          </span>
           <h1 className="result-number">{number}</h1>
         </div>
         <div className="result-right">
@@ -564,6 +567,7 @@ export default function App() {
   const [shipment, setShipment] = useState(null)
   const [error, setError] = useState(null)
   const [recent, setRecent] = useState([])
+  const [lastKnown, setLastKnown] = useState(false)
   const liveRef = useRef(null)
 
   useEffect(() => {
@@ -581,6 +585,7 @@ export default function App() {
 
   const runTransition = async (num, fetcher) => {
     setError(null)
+    setLastKnown(false)
     setLocatedNumber(num.toUpperCase())
     setPhase('locating')
     announce(`Locating shipment ${num}`)
@@ -590,8 +595,24 @@ export default function App() {
       setShipment(result)
       setQuery(num)
       setPhase('done')
+      setLastKnown(false)
       announce(`Shipment ${num} located`)
     } catch (err) {
+      // Live request failed or hit the bounded timeout — offer the stored
+      // record from the API, clearly labelled as last known, never as fresh.
+      try {
+        const stored = await getContainer(num)
+        if (stored && (stored.container_number || stored.tracking_number)) {
+          setShipment(stored)
+          setQuery(num)
+          setLastKnown(true)
+          setPhase('done')
+          announce(`Live source unavailable for ${num}. Showing last known data.`)
+          return
+        }
+      } catch {
+        // no stored record either
+      }
       setError(err.message || 'Failed to track container shipment.')
       setPhase('idle')
       announce('Tracking failed')
@@ -622,6 +643,7 @@ export default function App() {
     setPhase('idle')
     setQuery('')
     setError(null)
+    setLastKnown(false)
     window.scrollTo({ top: 0 })
     setTimeout(() => document.querySelector('.hotbar-input')?.focus(), 80)
   }
@@ -661,7 +683,7 @@ export default function App() {
         {phase === 'locating' && <Locating number={locatedNumber} done={false} />}
 
         {phase === 'done' && shipment && (
-          <ResultView shipment={shipment} onNewSearch={newSearch} />
+          <ResultView shipment={shipment} onNewSearch={newSearch} lastKnown={lastKnown} />
         )}
       </main>
     </div>
