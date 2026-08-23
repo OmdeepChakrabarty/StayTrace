@@ -8,7 +8,7 @@ import requests
 
 from api.main import create_app, TrackingService
 from db.database import init_db
-from scraper.brightdata import BrightDataClient
+from scraper.brightdata import BrightDataClient, BrightDataError
 
 
 @pytest.fixture
@@ -149,17 +149,22 @@ def test_track_container_live_fetch_routes_to_official_source_and_rejects_empty_
 
 def test_track_container_unlocker_path_for_non_browser_carriers(tmp_path, monkeypatch):
     """
-    Non-browser ocean carriers (e.g. Maersk) must keep using the stateless
-    Web Unlocker fetch path - browser sessions are reserved for carriers that
-    declare requires_browser.
+    Non-browser ocean carriers keep the stateless Web Unlocker fetch as their
+    primary path. When that source yields an unusable page (JS shell), the
+    service escalates once to a bounded Scraping Browser session; if that also
+    fails, it raises instead of fabricating data.
     """
     db_file = str(tmp_path / "unlocker_path.db")
     init_db(db_path=db_file)
 
-    def fail_browser_fetch(adapter, container_number):
-        raise AssertionError("browser session must not be used for non-browser carriers")
+    browser_calls = []
 
-    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", fail_browser_fetch)
+    def failing_browser_fetch(adapter, container_number):
+        browser_calls.append(container_number)
+        from scraper.browser_session import BrowserSessionError
+        raise BrowserSessionError("carrier page never rendered tracking results")
+
+    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", failing_browser_fetch)
 
     mock_client = MagicMock(spec=BrightDataClient)
     mock_client.build_tracking_url.return_value = "https://www.maersk.com/tracking/MAEU6284920"
@@ -169,7 +174,70 @@ def test_track_container_unlocker_path_for_non_browser_carriers(tmp_path, monkey
     mock_client.unlock_url.return_value = mock_resp
 
     svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
-    container, _ = svc.track_container("MAEU6284920", shipping_line="maersk", fetch_live=True)
+    with pytest.raises(BrightDataError):
+        svc.track_container("MAEU6284920", shipping_line="maersk", fetch_live=True)
 
     assert mock_client.unlock_url.called
-    assert container["shipping_line"] == "maersk"
+    # Escalation attempted exactly once for the same reference.
+    assert browser_calls == ["MAEU6284920"]
+    assert svc.get_parcel("MAEU6284920") is None
+
+
+def test_track_container_escalates_to_browser_on_shell_page(tmp_path, monkeypatch):
+    """
+    When the stateless source returns only a JS shell and normal extraction
+    fails, the service escalates to the adapter's browser session and parses
+    the genuinely rendered result. No data is fabricated on failure paths.
+    """
+    db_file = str(tmp_path / "escalation.db")
+    init_db(db_path=db_file)
+
+    fixtures_dir = Path(__file__).parent / "fixtures" / "ocean"
+    rendered_html = (fixtures_dir / "redesigned_page.html").read_text(encoding="utf-8")
+
+    def fake_browser_fetch(adapter, container_number):
+        assert container_number == "MSCU1234566"
+        return rendered_html
+
+    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", fake_browser_fetch)
+
+    mock_client = MagicMock(spec=BrightDataClient)
+    mock_client.build_tracking_url.return_value = "https://www.msc.com/en/track-a-shipment?trackingNumber=MSCU1234566"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "<html><body>app shell</body></html>"
+    mock_client.unlock_url.return_value = mock_resp
+
+    svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
+    container, _ = svc.track_container("MSCU1234566", shipping_line="msc", fetch_live=True)
+
+    details = json.loads(container["healing_details"])
+    assert container["container_number"] == "MSCU1234566"
+    assert container["status"] == "in_transit"
+    assert container["vessel_name"] == "MSC ISABELLA"
+    assert any("escalating" in entry.lower() for entry in details["diagnostic_log"])
+
+
+def test_track_container_no_escalation_when_extraction_passes(tmp_path, monkeypatch):
+    """A usable stateless source must never trigger a browser session."""
+    db_file = str(tmp_path / "no_escalation.db")
+    init_db(db_path=db_file)
+
+    fixtures_dir = Path(__file__).parent / "fixtures" / "ocean"
+    good_html = (fixtures_dir / "original_page.html").read_text(encoding="utf-8")
+
+    def fail_browser_fetch(adapter, container_number):
+        raise AssertionError("browser session must not run when extraction succeeds")
+
+    monkeypatch.setattr("api.main.fetch_carrier_page_via_browser", fail_browser_fetch)
+
+    mock_client = MagicMock(spec=BrightDataClient)
+    mock_client.build_tracking_url.return_value = "https://www.msc.com/en/track-a-shipment?trackingNumber=MSCU1234566"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = good_html
+    mock_client.unlock_url.return_value = mock_resp
+
+    svc = TrackingService(brightdata_client=mock_client, db_path=db_file)
+    container, _ = svc.track_container("MSCU1234566", shipping_line="msc", fetch_live=True)
+    assert container["healing_status"] == "normal"

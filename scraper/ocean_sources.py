@@ -26,6 +26,10 @@ class OceanSourceAdapter(abc.ABC):
     # Carriers whose official source requires a real session-based browser flow
     # (CSRF token + cookie bound form POST) instead of a stateless page fetch.
     requires_browser: bool = False
+    # Carriers whose stateless page fetch may return only a JavaScript shell;
+    # when normal extraction fails on such a source, the service escalates to
+    # the Scraping Browser session using the adapter's declared plan.
+    browser_fallback: bool = False
 
     def __init__(self) -> None:
         pass
@@ -63,15 +67,42 @@ class OceanSourceAdapter(abc.ABC):
 # Carrier Source Adapter Implementations
 # =====================================================================
 
+
+def _rendered_reference_success_js(reference: str) -> str:
+    """
+    Strict browser-session success marker: the searched container reference
+    must appear in the *rendered text* of the page (innerText excludes input
+    values and URL strings), so anti-bot shells and empty search forms never
+    count as tracking results. No data is fabricated when this never fires.
+    """
+    safe_ref = re.escape(re.sub(r"\s+", "", reference.strip().upper()))
+    return f"/{safe_ref}/.test(document.body.innerText)"
+
+
 class MSCOceanAdapter(OceanSourceAdapter):
     """MSC Mediterranean Shipping Company official tracking adapter."""
     carrier_id = "msc"
     display_name = "MSC Mediterranean Shipping Company"
     supported_prefixes = ("MSCU", "MEDU")
+    # msc.com is a JavaScript single-page app: a stateless fetch returns the
+    # application shell without tracking state, so extraction escalates to a
+    # real browser session that renders the results for the queried container.
+    browser_fallback = True
 
     def build_tracking_url(self, container_number: str) -> str:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
         return f"https://www.msc.com/en/track-a-shipment?trackingNumber={clean}"
+
+    def get_browser_plan(self, container_number: str) -> Dict[str, Any]:
+        clean = re.sub(r"\s+", "", container_number.strip().upper())
+        return {
+            "start_url": self.build_tracking_url(clean),
+            # The SPA reads the trackingNumber query parameter and renders the
+            # shipment result automatically; no form interaction is required.
+            "success_js": _rendered_reference_success_js(clean),
+            "max_page_wait": 45.0,
+            "overall_timeout": 90.0,
+        }
 
 
 class MaerskOceanAdapter(OceanSourceAdapter):
@@ -79,10 +110,24 @@ class MaerskOceanAdapter(OceanSourceAdapter):
     carrier_id = "maersk"
     display_name = "Maersk Line"
     supported_prefixes = ("MAEU", "MSKU", "MRKU", "PONU")
+    # maersk.com/tracking is an anti-bot protected React application; stateless
+    # fetches return a challenge/shell page. Escalate to a real browser session.
+    browser_fallback = True
 
     def build_tracking_url(self, container_number: str) -> str:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
         return f"https://www.maersk.com/tracking/{clean}"
+
+    def get_browser_plan(self, container_number: str) -> Dict[str, Any]:
+        clean = re.sub(r"\s+", "", container_number.strip().upper())
+        return {
+            "start_url": self.build_tracking_url(clean),
+            # The tracking route renders the shipment timeline client-side for
+            # the requested reference; no form interaction is required.
+            "success_js": _rendered_reference_success_js(clean),
+            "max_page_wait": 45.0,
+            "overall_timeout": 90.0,
+        }
 
 
 class CMACGMOceanAdapter(OceanSourceAdapter):
@@ -120,8 +165,10 @@ class CMACGMOceanAdapter(OceanSourceAdapter):
                 "/containerReference\\s*=\\s*'" + safe_ref + "'/"
                 ".test(document.documentElement.outerHTML)"
             ),
-            "max_page_wait": 90.0,
-            "overall_timeout": 300.0,
+            # Bounded so a hanging carrier page can never stall the request
+            # indefinitely; the service retries once with a fresh session.
+            "max_page_wait": 45.0,
+            "overall_timeout": 120.0,
         }
 
     def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:

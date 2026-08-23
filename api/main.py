@@ -184,6 +184,47 @@ class TrackingService:
                     # Run self-healing extraction on the carrier webpage
                     incoming_container, telemetry = extract_with_self_healing(page_html, shipment_type="ocean_container")
 
+                    # Escalate to a real Scraping Browser session when the
+                    # stateless source returned no usable tracking state (e.g.
+                    # JavaScript application shells from MSC / Maersk) and the
+                    # adapter declares a browser fallback plan. If the rendered
+                    # page still contains no genuine results, the session fails
+                    # safely - nothing is fabricated.
+                    if (
+                        telemetry.extraction_status == "failed"
+                        and ocean_adapter is not None
+                        and getattr(ocean_adapter, "browser_fallback", False)
+                        and ocean_adapter.get_browser_plan(norm_container)
+                    ):
+                        telemetry.diagnostic_log.append(
+                            "Stateless source yielded no usable tracking state; "
+                            "escalating to Scraping Browser session."
+                        )
+                        rendered_html = fetch_carrier_page_via_browser(ocean_adapter, norm_container)
+                        bparsed = ocean_adapter.parse_official_response(rendered_html)
+                        if bparsed is not None:
+                            incoming_container = normalize_container_shipment(bparsed)
+                            escalation_note = telemetry.diagnostic_log[-1] if telemetry.diagnostic_log else ""
+                            telemetry = ExtractionTelemetry()
+                            telemetry.extraction_status = "normal"
+                            telemetry.original_strategy_status = "passed"
+                            telemetry.validation_result = "passed"
+                            telemetry.confidence = 1.0
+                            if escalation_note:
+                                telemetry.diagnostic_log.append(escalation_note)
+                            telemetry.diagnostic_log.append(
+                                f"Parsed structured tracking state via {inferred_line} browser session."
+                            )
+                        else:
+                            incoming_container, telemetry = extract_with_self_healing(
+                                rendered_html, shipment_type="ocean_container"
+                            )
+                            telemetry.diagnostic_log.insert(
+                                0,
+                                "Stateless source yielded no usable tracking state; "
+                                "escalating to Scraping Browser session.",
+                            )
+
                 telemetry_dict = telemetry.to_dict()
                 incoming_container["container_number"] = norm_container
                 incoming_container["tracking_number"] = norm_container

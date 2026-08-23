@@ -74,3 +74,77 @@ def test_telemetry_serialization():
     assert d["extraction_status"] == "healed"
     assert d["confidence"] == 0.92
     assert "timestamp" in d
+
+
+# ---------------------------------------------------------------------------
+# Reliability improvements: candidate association, validation, consistency
+# ---------------------------------------------------------------------------
+
+def test_nested_candidates_are_collapsed_not_treated_as_contradiction():
+    """An event sentence containing the vessel name is consistent evidence,
+    not a conflicting candidate - the concise value must win."""
+    html = """
+    <html><body>
+      <div class="timeline">
+        <div class="event">Container laden on board MSC ISABELLA at CNSHA on 2026-09-01 08:30</div>
+        <div class="event">Departed Shanghai on 2026-09-02</div>
+      </div>
+      <dl><dt>Vessel Name</dt><dd>MSC ISABELLA</dd></dl>
+      <table>
+        <tr><th>Origin</th><td>Shanghai, China</td></tr>
+        <tr><th>Destination</th><td>Rotterdam, Netherlands</td></tr>
+        <tr><th>Status</th><td>In Transit</td></tr>
+      </table>
+      <p>Container MSCU1234566 · Voyage FD432R</p>
+    </body></html>
+    """
+    data, telemetry = extract_with_self_healing(html)
+    assert telemetry.extraction_status == "healed"
+    assert data["vessel_name"] == "MSC ISABELLA"
+
+
+def test_conflicting_equal_strength_candidates_are_refused():
+    """Two equally strong, mutually exclusive vessel candidates must not be
+    resolved by guessing."""
+    html = """
+    <html><body>
+      <section class="card-a"><span>Vessel</span> <b>MV OCEAN QUEEN</b></section>
+      <section class="card-b"><span>Vessel</span> <b>MV SEA PHOENIX</b></section>
+      <p>Container MSCU1234566</p>
+    </body></html>
+    """
+    data, telemetry = extract_with_self_healing(html)
+    # Either no vessel is claimed at all, or the refusal is logged - never a coin flip.
+    if data.get("vessel_name"):
+        raise AssertionError("ambiguous vessel candidates must not be silently resolved")
+    assert any("vessel" in log.lower() and ("ambiguit" in log.lower() or "refus" in log.lower())
+               for log in telemetry.diagnostic_log)
+
+
+def test_implausible_eta_candidate_is_discarded():
+    """A non-parseable value near an ETA label must never become the ETA."""
+    html = """
+    <html><body>
+      <div><dt>ETA</dt><dd>upon vessel departure confirmation</dd></div>
+      <p>Shipment MSCU1234566 from Shanghai to Rotterdam, status in transit.</p>
+    </body></html>
+    """
+    data, _ = extract_with_self_healing(html)
+    assert not data.get("estimated_arrival")
+
+
+def test_identical_origin_and_destination_is_rejected_as_conflicting():
+    html = """
+    <html><body>
+      <table>
+        <tr><th>Origin</th><td>Singapore</td></tr>
+        <tr><th>Destination</th><td>Singapore</td></tr>
+        <tr><th>Status</th><td>In Transit</td></tr>
+      </table>
+      <p>Container MSCU1234566 voyage FD432R</p>
+    </body></html>
+    """
+    data, telemetry = extract_with_self_healing(html)
+    ports = {data.get("origin_port"), data.get("destination_port")}
+    assert "Singapore" not in ports
+    assert any("identical" in log.lower() for log in telemetry.diagnostic_log)

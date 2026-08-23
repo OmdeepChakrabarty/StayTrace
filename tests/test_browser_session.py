@@ -108,7 +108,7 @@ CARRIER_IDS = [
 
 
 @pytest.mark.parametrize("carrier_id", CARRIER_IDS)
-def test_only_cma_cgm_requires_browser_session(carrier_id):
+def test_browser_session_plans_by_carrier(carrier_id):
     adapter = default_ocean_registry.get_adapter(carrier_id)
     assert adapter is not None
     if carrier_id == "cma_cgm":
@@ -124,8 +124,27 @@ def test_only_cma_cgm_requires_browser_session(carrier_id):
         success_js = plan["success_js"]
         assert "containerReference" in success_js
         assert "CMAU0600020" in success_js
+        # Bounded so a hanging carrier page can never stall requests.
+        assert plan["overall_timeout"] <= 150.0
+        assert plan["max_page_wait"] <= 60.0
+    elif carrier_id in ("msc", "maersk"):
+        # JS-shell SPA sources: stateless first, real browser session as a
+        # bounded fallback when normal extraction finds nothing usable.
+        assert adapter.requires_browser is False
+        assert adapter.browser_fallback is True
+        plan = adapter.get_browser_plan("MSCU1234566" if carrier_id == "msc" else "MAEU6284920")
+        assert plan is not None
+        ref = "MSCU1234566" if carrier_id == "msc" else "MAEU6284920"
+        assert plan["start_url"].startswith("https://www.")
+        assert "google.com" not in plan["start_url"]
+        # Success must require the rendered reference text - shells never pass.
+        assert ref in plan["success_js"]
+        assert "innerText" in plan["success_js"]
+        assert plan["overall_timeout"] <= 120.0
+        assert plan["max_page_wait"] <= 60.0
     else:
         assert adapter.requires_browser is False
+        assert adapter.browser_fallback is False
         assert adapter.get_browser_plan("X") is None
 
 
@@ -142,9 +161,9 @@ def test_fetch_carrier_page_via_browser_executes_plan():
 
 
 def test_fetch_carrier_page_via_browser_rejects_missing_plan():
-    adapter = default_ocean_registry.get_adapter("maersk")
+    adapter = default_ocean_registry.get_adapter("cosco")
     with pytest.raises(BrowserSessionError, match="does not define a browser session plan"):
-        fetch_carrier_page_via_browser(adapter, "MAEU6284920")
+        fetch_carrier_page_via_browser(adapter, "COSU1234567")
 
 
 # ---------------------------------------------------------------------------

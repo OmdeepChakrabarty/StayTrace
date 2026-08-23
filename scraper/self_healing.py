@@ -168,6 +168,15 @@ class SelfHealingExtractor:
         """Look for adjacent value element or text node near a semantic label."""
         elem_text = label_elem.get_text(strip=True)
 
+        # 0. Definition lists hold their own value - never leak a neighbouring
+        #    structural sibling's content into this field.
+        if label_elem.name == "dl":
+            dd = label_elem.find("dd")
+            if dd:
+                val = dd.get_text(strip=True)
+                if val and len(val) < 150:
+                    return val
+
         # 1. Check if label element contains inline label: value format
         if ":" in elem_text:
             match = re.search(pattern, elem_text, re.IGNORECASE)
@@ -177,9 +186,15 @@ class SelfHealingExtractor:
                 if val and len(val) < 150:
                     return val
 
-        # 2. Next sibling element or text of the label
+        # 2. Next sibling element or text of the label. Siblings that are
+        #    themselves multi-field structures (tables, definition lists,
+        #    labelled rows) describe *other* fields and must be skipped.
         sibling = label_elem.find_next_sibling()
-        if sibling and isinstance(sibling, Tag):
+        if (
+            sibling
+            and isinstance(sibling, Tag)
+            and not sibling.find(["table", "tr", "th", "td", "dt", "dl"])
+        ):
             text = sibling.get_text(strip=True)
             if text and len(text) < 150:
                 return text
@@ -337,6 +352,68 @@ class SelfHealingExtractor:
 
         return False
 
+    def _is_plausible_value(self, field_name: str, value: str) -> bool:
+        """Deterministic plausibility filter applied before accepting a candidate."""
+        clean = (value or "").strip()
+        if not clean or len(clean) > 120:
+            return False
+
+        # Date fields must actually resolve to a timestamp - never accept
+        # arbitrary text that merely sat near an ETA label.
+        if field_name in ("estimated_arrival", "estimated_departure"):
+            return bool(normalize_timestamp(clean))
+
+        # Voyage references never look like years or full dates.
+        if field_name == "voyage_number":
+            if re.fullmatch(r"(19|20)\d{2}", clean):
+                return False
+            if re.search(r"\d{4}[-/]\d{2}[-/]\d{2}", clean):
+                return False
+
+        # Port fields must contain alphabetic content and never be bare numbers.
+        if field_name in ("origin_port", "destination_port"):
+            if not re.search(r"[A-Za-z]", clean) or re.fullmatch(r"[0-9,\s\-]+", clean):
+                return False
+
+        return True
+
+    def _select_candidate(
+        self,
+        field_name: str,
+        candidates: List[Tuple[str, float]],
+        telemetry: "ExtractionTelemetry",
+    ) -> Optional[str]:
+        """
+        Choose one value for a single-value field. Refuses to guess when the
+        evidence is contradictory (ambiguous candidates), and discards
+        implausible values deterministically instead of accepting them.
+        """
+        filtered = [(v, s) for v, s in candidates if self._is_plausible_value(field_name, v)]
+        if not filtered:
+            return None
+
+        # Collapse nested duplicates: when one candidate merely embeds another
+        # (e.g. an event sentence containing the vessel name), the sources are
+        # consistent rather than contradictory - keep the concise value.
+        values = [v for v, _ in filtered]
+        concise = [
+            v for v in values
+            if not any(v.lower() != o.lower() and o.lower() in v.lower() for o in values)
+        ]
+        if concise:
+            seen: Set[str] = set()
+            filtered = [
+                (v, s) for v, s in filtered
+                if v in concise and not (v.lower() in seen or seen.add(v.lower()))
+            ]
+
+        if self.detect_ambiguity(field_name, filtered):
+            telemetry.diagnostic_log.append(
+                f"Ambiguity detected among {field_name} candidates; refusing to guess."
+            )
+            return None
+        return filtered[0][0]
+
     def extract_with_healing(self, html: str, shipment_type: str = "ocean_container") -> Tuple[Dict[str, Any], ExtractionTelemetry]:
         """
         Execute baseline extraction, detect failures, apply semantic recovery,
@@ -392,44 +469,72 @@ class SelfHealingExtractor:
                 recovered_field_names.append("shipping_line")
 
         # Recover Status
-        status_candidates = candidates.get("status", [])
-        if status_candidates:
-            recovered_data["status"] = status_candidates[0][0]
+        status_value = self._select_candidate("status", candidates.get("status", []), telemetry)
+        if status_value:
+            recovered_data["status"] = status_value
             recovered_field_names.append("status")
-            telemetry.diagnostic_log.append(f"Recovered status: {status_candidates[0][0]}")
+            telemetry.diagnostic_log.append(f"Recovered status: {status_value}")
 
-        # Recover Ports and check for ambiguity
+        # Recover Ports (ambiguity refuses to guess; conflicts penalize confidence)
         origin_candidates = candidates.get("origin_port", [])
-        if origin_candidates:
-            if self.detect_ambiguity("origin_port", origin_candidates):
-                telemetry.diagnostic_log.append("Ambiguity detected in origin port candidates.")
-            recovered_data["origin_port"] = origin_candidates[0][0]
+        ambiguous_origin = bool(origin_candidates) and self.detect_ambiguity(
+            "origin_port", [c for c in origin_candidates if self._is_plausible_value("origin_port", c[0])]
+        )
+        origin_value = self._select_candidate("origin_port", origin_candidates, telemetry)
+        if origin_value:
+            recovered_data["origin_port"] = origin_value
             recovered_field_names.append("origin_port")
 
         dest_candidates = candidates.get("destination_port", [])
-        ambiguous_destination = False
-        if dest_candidates:
-            if self.detect_ambiguity("destination_port", dest_candidates):
-                ambiguous_destination = True
-                telemetry.diagnostic_log.append("Severe ambiguity: conflicting destination ports with equal evidence.")
-            recovered_data["destination_port"] = dest_candidates[0][0]
+        dest_value = self._select_candidate("destination_port", dest_candidates, telemetry)
+        ambiguous_destination = bool(dest_candidates) and self.detect_ambiguity(
+            "destination_port", [c for c in dest_candidates if self._is_plausible_value("destination_port", c[0])]
+        )
+
+        # Cross-field consistency: identical origin and destination is a
+        # contradictory reading of the source, not evidence of a port.
+        if (
+            origin_value
+            and dest_value
+            and origin_value.strip().lower() == dest_value.strip().lower()
+        ):
+            telemetry.diagnostic_log.append(
+                "Origin and destination candidates are identical; treating as conflicting evidence."
+            )
+            ambiguous_origin = True
+            ambiguous_destination = True
+            for field in ("origin_port", "destination_port"):
+                if recovered_data.get(field):
+                    recovered_data.pop(field, None)
+                if field in recovered_field_names:
+                    recovered_field_names.remove(field)
+            origin_value = None
+            dest_value = None
+
+        if dest_value:
+            recovered_data["destination_port"] = dest_value
             recovered_field_names.append("destination_port")
 
+        if ambiguous_origin or ambiguous_destination:
+            telemetry.diagnostic_log.append(
+                "Severe ambiguity: conflicting port evidence with equal strength."
+            )
+
         # Recover Vessel & Voyage
-        vessel_candidates = candidates.get("vessel_name", [])
-        if vessel_candidates:
-            recovered_data["vessel_name"] = vessel_candidates[0][0]
+        vessel_value = self._select_candidate("vessel_name", candidates.get("vessel_name", []), telemetry)
+        if vessel_value:
+            recovered_data["vessel_name"] = vessel_value
             recovered_field_names.append("vessel_name")
 
-        voyage_candidates = candidates.get("voyage_number", [])
-        if voyage_candidates:
-            recovered_data["voyage_number"] = voyage_candidates[0][0]
+        voyage_value = self._select_candidate("voyage_number", candidates.get("voyage_number", []), telemetry)
+        if voyage_value:
+            recovered_data["voyage_number"] = voyage_value
             recovered_field_names.append("voyage_number")
 
-        # Recover ETA
-        eta_candidates = candidates.get("estimated_arrival", [])
-        if eta_candidates:
-            recovered_data["estimated_arrival"] = eta_candidates[0][0]
+        # Recover ETA (only genuinely parseable arrival dates are accepted)
+        eta_value = self._select_candidate("estimated_arrival", candidates.get("estimated_arrival", []), telemetry)
+        if eta_value:
+            recovered_data["estimated_arrival"] = eta_value
             recovered_field_names.append("estimated_arrival")
 
         # Recover Checkpoint Events
