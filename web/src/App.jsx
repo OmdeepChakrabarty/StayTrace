@@ -279,6 +279,7 @@ function Home({
   recent,
   onOpenRecent,
   goParcel,
+  health,
 }) {
   return (
     <div className="home">
@@ -653,6 +654,7 @@ export default function App() {
             recent={recent}
             onOpenRecent={handleOpenRecent}
             goParcel={() => navigate('/parcel')}
+            health={health}
           />
         )}
 
