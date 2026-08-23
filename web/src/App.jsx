@@ -1,15 +1,28 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { checkHealth, trackParcel, listParcels, deleteParcel } from './api'
 import { trackContainer, listContainers, getContainer, runHealingDemo } from './api'
-import TrackingSearch from './components/TrackingSearch'
-import ShipmentHeader from './components/ShipmentHeader'
-import RouteProgress from './components/RouteProgress'
-import ExtractionHealth from './components/ExtractionHealth'
-import ShipmentStats from './components/ShipmentStats'
+import AsciiEarth from './components/AsciiEarth'
+import AsciiShip from './components/AsciiShip'
+import Hotbar from './components/Hotbar'
+import SelfHealing from './components/SelfHealing'
 import Timeline from './components/Timeline'
+import DemoMenu from './components/DemoMenu'
+
+const OCEAN_STATUS_LABELS = {
+  booked: 'BOOKED',
+  gate_in: 'GATE IN',
+  loaded: 'LOADED ON VESSEL',
+  in_transit: 'IN TRANSIT',
+  transshipment: 'TRANSSHIPMENT',
+  discharged: 'DISCHARGED',
+  customs_hold: 'CUSTOMS HOLD',
+  gate_out: 'GATE OUT',
+  delivered: 'DELIVERED',
+  unknown: 'UNKNOWN',
+}
 
 const CARRIERS = [
-  { id: 'auto', name: 'Auto Detect Carrier' },
+  { id: 'auto', name: 'Auto Detect' },
   { id: 'usps', name: 'USPS' },
   { id: 'fedex', name: 'FedEx' },
   { id: 'ups', name: 'UPS' },
@@ -19,228 +32,356 @@ const CARRIERS = [
   { id: 'other', name: 'Other' },
 ]
 
-const SHIPPING_LINES = [
-  { id: 'auto', name: 'Auto Detect Line' },
-  { id: 'msc', name: 'MSC' },
-  { id: 'maersk', name: 'Maersk' },
-  { id: 'cma_cgm', name: 'CMA CGM' },
-  { id: 'cosco', name: 'COSCO' },
-  { id: 'hapag_lloyd', name: 'Hapag-Lloyd' },
-  { id: 'one', name: 'ONE' },
-  { id: 'evergreen', name: 'Evergreen' },
-  { id: 'zim', name: 'ZIM' },
-]
+const PARCEL_FILTERS = ['all', 'in_transit', 'out_for_delivery', 'delivered', 'pre_transit', 'exception']
 
-const OCEAN_STATUS_LABELS = {
-  booked: 'Booked',
-  gate_in: 'Gate In',
-  loaded: 'Loaded on Vessel',
-  in_transit: 'In Transit',
-  transshipment: 'Transshipment',
-  discharged: 'Discharged',
-  customs_hold: 'Customs Hold',
-  gate_out: 'Gate Out',
-  delivered: 'Delivered',
-  unknown: 'Unknown',
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-const LINE_MARQUEE = ['MSC', 'MAERSK', 'CMA CGM', 'COSCO', 'ONE', 'HAPAG-LLOYD']
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-function BrandMark() {
+function usePath() {
+  const [path, setPath] = useState(window.location.pathname)
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  const navigate = (to) => {
+    window.history.pushState({}, '', to)
+    setPath(to)
+    window.scrollTo(0, 0)
+  }
+  return [path, navigate]
+}
+
+function Brand({ onClick }) {
   return (
-    <span className="brand-mark" aria-hidden="true">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 17c3-6 6-9 9-9s5 2 5 4-2 3-4 3" />
-        <circle cx="19" cy="7" r="1.6" fill="currentColor" stroke="none" />
-      </svg>
-    </span>
+    <button type="button" className="brand" onClick={onClick} aria-label="StayTrace home">
+      <span className="brand-block" aria-hidden="true">▮</span>
+      <span className="brand-text">STAYTRACE</span>
+      <span className="brand-cursor" aria-hidden="true">_</span>
+    </button>
   )
 }
 
-function SelfHealingDemo({ onNotify }) {
+function Header({ onHome, onParcel, showParcelLink = true }) {
+  return (
+    <header className="topbar">
+      <Brand onClick={onHome} />
+      {showParcelLink && (
+        <button type="button" className="top-link" onClick={onParcel}>
+          TRACK PACKAGE →
+        </button>
+      )}
+    </header>
+  )
+}
+
+/* ================= ENGINE DEMO ================= */
+
+function EngineDemo() {
+  const [open, setOpen] = useState(false)
   const [scenario, setScenario] = useState('redesigned')
   const [demo, setDemo] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const runDemo = async (scen) => {
+  const run = async (scen) => {
     setLoading(true)
     setScenario(scen)
     setDemo(null)
     try {
-      const result = await runHealingDemo(scen)
-      setDemo(result)
+      setDemo(await runHealingDemo(scen))
     } catch {
       setDemo(null)
-      onNotify && onNotify('Self-healing demo is unavailable right now.')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    runDemo('redesigned')
+    if (open && !demo && !loading) run(scenario)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [open])
 
   const t = demo?.telemetry
 
   return (
-    <section className="panel demo-panel">
-      <div className="panel-head">
-        <div>
-          <h2 className="panel-title">Self-healing engine</h2>
-          <p className="panel-sub">
-            Controlled engineering simulation of a carrier page structure change — not live data.
+    <section className="engine">
+      <button type="button" className="link-dim" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {open ? '▾ hide self-healing engine' : '▸ how the self-healing engine works'}
+      </button>
+
+      {open && (
+        <div className="engine-panel">
+          <div className="engine-head">
+            <span className="engine-title">SELF-HEALING ENGINE · SIMULATION</span>
+            <div className="segmented">
+              {[
+                ['original', 'ORIGINAL PAGE'],
+                ['redesigned', 'REDESIGN'],
+                ['ambiguous', 'AMBIGUOUS'],
+              ].map(([id, label]) => (
+                <button key={id} type="button" className={`segment ${scenario === id ? 'active' : ''}`} onClick={() => run(id)} disabled={loading}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="engine-note">
+            Controlled simulation of a carrier page structure change — not live data.
           </p>
+
+          {loading && (
+            <p className="engine-status">running extraction…</p>
+          )}
+
+          {!loading && !demo && <p className="engine-status">simulation unavailable.</p>}
+
+          {!loading && demo && t && (
+            <div className="engine-flow">
+              <div className="ef-row">
+                <span className="ef-k">CARRIER PAGE</span>
+                <span className="ef-v">{demo.description}</span>
+              </div>
+              <div className="ef-row">
+                <span className="ef-k">ORIGINAL STRATEGY</span>
+                <span className={`ef-v ${t.original_strategy_status === 'passed' ? 'ok' : 'bad'}`}>
+                  {t.original_strategy_status === 'passed' ? '✓ PASSED' : '✗ FAILED'}
+                </span>
+              </div>
+              {t.original_strategy_status === 'failed' && (
+                <div className="ef-row highlight">
+                  <span className="ef-k">SELF-HEALING · {t.recovery_strategy}</span>
+                  <span className={`ef-v ${t.extraction_status === 'healed' ? 'ok' : 'bad'}`}>
+                    {t.extraction_status === 'healed'
+                      ? `⚡ RECOVERED: ${t.recovered_fields.join(', ')}`
+                      : `⚠ ${t.validation_result}`}
+                  </span>
+                </div>
+              )}
+              <div className="ef-row">
+                <span className="ef-k">VALIDATION</span>
+                <span className={`ef-v ${t.validation_result === 'passed' ? 'ok' : 'bad'}`}>
+                  {t.validation_result === 'passed' ? '✓ PASSED' : '⚠ REJECTED'}
+                  {' · '}
+                  {(t.confidence * 100).toFixed(0)}%
+                </span>
+              </div>
+              {demo.extracted_shipment?.container_number && (
+                <div className="ef-row">
+                  <span className="ef-k">EXTRACTED</span>
+                  <span className="ef-v mono">
+                    {demo.extracted_shipment.container_number} ·{' '}
+                    {(demo.extracted_shipment.shipping_line || '').toUpperCase()} ·{' '}
+                    {OCEAN_STATUS_LABELS[demo.extracted_shipment.status] || demo.extracted_shipment.status}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        <div className="segmented" role="group" aria-label="Demo scenario">
-          {[
-            ['original', 'Original Page'],
-            ['redesigned', 'Simulated Redesign'],
-            ['ambiguous', 'Ambiguous Data'],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={`segment ${scenario === id ? 'active' : ''}`}
-              onClick={() => runDemo(id)}
-              disabled={loading}
-            >
-              {label}
-            </button>
-          ))}
+      )}
+    </section>
+  )
+}
+
+/* ================= RESULT VIEW ================= */
+
+function Stat({ label, value, mono }) {
+  return (
+    <div className="stat">
+      <span className="stat-label">{label}</span>
+      <span className={`stat-value ${mono ? 'mono' : ''} ${value ? '' : 'missing'}`}>{value || '— pending'}</span>
+    </div>
+  )
+}
+
+function ResultView({ shipment, onNewSearch }) {
+  const number = shipment.container_number || shipment.tracking_number
+  const status = OCEAN_STATUS_LABELS[shipment.status] || (shipment.status || 'UNKNOWN').toUpperCase()
+
+  return (
+    <div className="result">
+      <div className="result-top reveal" style={{ '--d': '0ms' }}>
+        <div className="result-id">
+          <span className="result-line">{(shipment.shipping_line || '').toUpperCase()}</span>
+          <h1 className="result-number">{number}</h1>
+        </div>
+        <div className="result-right">
+          <SelfHealing shipment={shipment} />
         </div>
       </div>
 
-      {loading && (
-        <div className="demo-flow">
-          <div className="skeleton-line w60" />
-          <div className="skeleton-line w80" />
-          <div className="skeleton-line w40" />
-        </div>
-      )}
+      <AsciiShip active />
 
-      {!loading && !demo && <p className="empty-state">Simulation unavailable.</p>}
-
-      {!loading && demo && t && (
-        <div className="demo-flow">
-          <div className="demo-step">
-            <span className="demo-step-kicker">Carrier page</span>
-            <p className="demo-step-desc">{demo.description}</p>
-          </div>
-          <div className="demo-step">
-            <span className="demo-step-kicker">Original extraction strategy</span>
-            <p className={t.original_strategy_status === 'passed' ? 'verdict ok' : 'verdict bad'}>
-              {t.original_strategy_status === 'passed' ? '✓ Passed' : '✗ Failed'}
-            </p>
-          </div>
-          {t.original_strategy_status === 'failed' && (
-            <div className="demo-step highlight">
-              <span className="demo-step-kicker">Self-healing recovery · {t.recovery_strategy}</span>
-              <p className={t.extraction_status === 'healed' ? 'verdict ok' : 'verdict bad'}>
-                {t.extraction_status === 'healed'
-                  ? `⚡ Recovered: ${t.recovered_fields.join(', ')}`
-                  : `⚠ ${t.validation_result}`}
-              </p>
-            </div>
-          )}
-          <div className="demo-step">
-            <span className="demo-step-kicker">Deterministic validation</span>
-            <p className={t.validation_result === 'passed' ? 'verdict ok' : 'verdict bad'}>
-              {t.validation_result === 'passed' ? '✓ Passed' : '⚠ Rejected'}
-              <span className="confidence-chip">{(t.confidence * 100).toFixed(0)}% confidence</span>
-            </p>
-          </div>
-          {demo.extracted_shipment?.container_number && (
-            <p className="demo-extract">
-              Recovered shipment{' '}
-              <strong>{demo.extracted_shipment.container_number}</strong>
-              {' · '}
-              {(demo.extracted_shipment.shipping_line || '').toUpperCase()}
-              {' · '}
-              {OCEAN_STATUS_LABELS[demo.extracted_shipment.status] || demo.extracted_shipment.status}
-            </p>
-          )}
+      <div className="route-strip reveal" style={{ '--d': '120ms' }}>
+        <div className="route-port">
+          <span className="rp-name">{shipment.origin_port || 'ORIGIN'}</span>
+          {shipment.origin_port_code && <span className="rp-code">[{shipment.origin_port_code}]</span>}
+          <span className="rp-date">
+            {shipment.actual_departure
+              ? `DEPARTED ${shipment.actual_departure.slice(0, 10)}`
+              : shipment.estimated_departure
+                ? `ETD ${shipment.estimated_departure.slice(0, 10)}`
+                : ''}
+          </span>
         </div>
-      )}
-    </section>
+
+        <div className="route-dash" aria-hidden="true">
+          <span className={`route-fill ${shipment.status === 'delivered' ? 'full' : shipment.actual_departure ? 'partial' : ''}`} />
+          <span className="route-status">{status}</span>
+        </div>
+
+        <div className="route-port right">
+          <span className="rp-name">{shipment.destination_port || 'DESTINATION'}</span>
+          {shipment.destination_port_code && <span className="rp-code">[{shipment.destination_port_code}]</span>}
+          <span className="rp-date">
+            {shipment.estimated_arrival ? `ETA ${shipment.estimated_arrival.slice(0, 10)}` : 'ETA PENDING'}
+          </span>
+        </div>
+      </div>
+
+      <div className="stats reveal" style={{ '--d': '220ms' }}>
+        <Stat label="VESSEL" value={shipment.vessel_name} />
+        <Stat label="VOYAGE" value={shipment.voyage_number} mono />
+        <Stat label="CURRENT LOCATION" value={shipment.current_location} />
+        <Stat label="ETA" value={shipment.estimated_arrival} mono />
+        <Stat label="LAST UPDATED" value={shipment.updated_at} mono />
+      </div>
+
+      <section className="panel reveal" style={{ '--d': '300ms' }}>
+        <div className="panel-head">
+          <span className="panel-title">TRACKING HISTORY</span>
+          <span className="panel-count">// {shipment.events?.length || 0} checkpoints</span>
+        </div>
+        <Timeline events={shipment.events} />
+      </section>
+
+      <div className="reveal" style={{ '--d': '380ms' }}>
+        <button type="button" className="new-search" onClick={onNewSearch}>
+          ← NEW SEARCH
+        </button>
+      </div>
+    </div>
   )
 }
 
-function ShipmentList({ title, items, renderMeta, onSelect, emptyMessage }) {
+/* ================= HOME ================= */
+
+function Home({
+  query,
+  setQuery,
+  onSubmit,
+  locating,
+  error,
+  reduced,
+  recent,
+  onOpenRecent,
+  goParcel,
+}) {
   return (
-    <section className="panel">
-      <h2 className="panel-title">{title}</h2>
-      {items.length === 0 ? (
-        <p className="empty-state">{emptyMessage}</p>
-      ) : (
-        <ul className="ship-list">
-          {items.map((item) => {
-            const key = item.container_number || item.tracking_number
-            return (
-              <li key={key}>
-                <button type="button" className="ship-row" onClick={() => onSelect(key)}>
-                  <span className="ship-row-num">{key}</span>
-                  <span className="ship-row-line">
-                    {(item.shipping_line || item.carrier || '').toUpperCase() || '—'}
-                  </span>
-                  <span className={`status-pill status-sm status-${item.status || 'unknown'}`}>
-                    <span className="status-pill-dot" aria-hidden="true" />
-                    {OCEAN_STATUS_LABELS[item.status] || item.status || 'Unknown'}
-                  </span>
-                  <span className="ship-row-meta">{renderMeta(item)}</span>
-                  <svg className="ship-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
+    <div className="home">
+      <AsciiEarth dim={locating} />
+
+      <section className={`hero ${locating ? 'away' : ''}`}>
+        <p className="eyebrow rise" style={{ '--d': '50ms' }}>
+          {'>'} SELF-HEALING SHIPMENT INTELLIGENCE
+        </p>
+        <h1 className="title rise" style={{ '--d': '150ms' }}>
+          STAYTRACE<span className="title-cursor" aria-hidden="true">▮</span>
+        </h1>
+        <p className="tagline rise" style={{ '--d': '260ms' }}>
+          Track ocean freight across changing logistics systems.
+        </p>
+
+        <div className="hotbar-slot rise" style={{ '--d': '380ms' }}>
+          <Hotbar
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onSubmit={onSubmit}
+            loading={false}
+            reducedMotion={reduced}
+          />
+        </div>
+
+        <div className="under-bar rise" style={{ '--d': '500ms' }}>
+          <DemoMenu onPick={(id) => onOpenRecent(id, true)} />
+          <span className="dot-sep" aria-hidden="true">·</span>
+          <button type="button" className="link-dim parcel-jump" onClick={goParcel}>
+            track individual packages →
+          </button>
+        </div>
+      </section>
+
+      {error && (
+        <div className="alert" role="alert">
+          <span>! {error}</span>
+        </div>
       )}
-    </section>
+
+      {!locating && recent.length > 0 && (
+        <section className="recent rise" style={{ '--d': '600ms' }}>
+          <span className="recent-label">RECENT</span>
+          <div className="recent-chips">
+            {recent.map((c) => (
+              <button
+                key={c.container_number || c.tracking_number}
+                type="button"
+                className="recent-chip"
+                onClick={() => onOpenRecent(c.container_number || c.tracking_number)}
+              >
+                <code>{c.container_number || c.tracking_number}</code>
+                <span>{(c.shipping_line || '').toUpperCase()}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <EngineDemo />
+
+      <footer className="footer">
+        <span className={`health-dot ${health}`} title={`API ${health}`} />
+        STAYTRACE · self-healing shipment intelligence
+      </footer>
+    </div>
   )
 }
 
-export default function App() {
-  // mode: 'ocean' (primary hero) | 'parcel' (secondary)
-  const [mode, setMode] = useState('ocean')
-  const [health, setHealth] = useState({ status: 'checking', database: 'unknown' })
+/* ================= LOCATING OVERLAY ================= */
 
-  // Ocean state
-  const [containerNumber, setContainerNumber] = useState('')
-  const [selectedLine, setSelectedLine] = useState('auto')
-  const [oceanLoading, setOceanLoading] = useState(false)
-  const [oceanError, setOceanError] = useState(null)
-  const [activeContainer, setActiveContainer] = useState(null)
-  const [containersList, setContainersList] = useState([])
+const SPINNER_FRAMES = ['|', '/', '─', '\\']
 
-  // Parcel state
+function Locating({ number, done }) {
+  const [frame, setFrame] = useState(0)
+  useEffect(() => {
+    if (prefersReducedMotion()) return
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 120)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div className="locating" aria-live="polite">
+      <AsciiShip active />
+      <p className="locating-msg">
+        <span className="spin-char" aria-hidden={!done}>{done ? '✓' : SPINNER_FRAMES[frame]}</span>{' '}
+        {done ? 'SHIPMENT LOCATED' : `LOCATING ${number} …`}
+      </p>
+    </div>
+  )
+}
+
+/* ================= PARCEL PAGE ================= */
+
+function ParcelPage({ navigate }) {
   const [trackingNumber, setTrackingNumber] = useState('')
-  const [selectedCarrier, setSelectedCarrier] = useState('auto')
-  const [parcelLoading, setParcelLoading] = useState(false)
-  const [parcelError, setParcelError] = useState(null)
+  const [carrier, setCarrier] = useState('auto')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [activeParcel, setActiveParcel] = useState(null)
   const [parcelsList, setParcelsList] = useState([])
   const [filterStatus, setFilterStatus] = useState('all')
-
-  useEffect(() => {
-    checkHealth()
-      .then((data) => setHealth(data))
-      .catch(() => setHealth({ status: 'offline', database: 'disconnected' }))
-    fetchContainers()
-    fetchParcels()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const fetchContainers = async () => {
-    try {
-      const data = await listContainers('', '', 50)
-      setContainersList(data.containers || [])
-    } catch (err) {
-      console.error('Failed to load containers:', err)
-    }
-  }
 
   const fetchParcels = async () => {
     try {
@@ -252,351 +393,275 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (mode === 'parcel') fetchParcels()
+    fetchParcels()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterStatus])
 
-  const handleTrackContainer = async (e) => {
-    if (e) e.preventDefault()
-    if (!containerNumber.trim()) {
-      setOceanError('Please enter a container number.')
-      return
-    }
-
-    setOceanLoading(true)
-    setOceanError(null)
-
-    try {
-      const result = await trackContainer(containerNumber, selectedLine)
-      setActiveContainer(result)
-      window.scrollTo({ top: 0 })
-      fetchContainers()
-    } catch (err) {
-      setOceanError(err.message || 'Failed to track container shipment.')
-    } finally {
-      setOceanLoading(false)
-    }
-  }
-
-  const handleTrackParcel = async (e) => {
+  const handleTrack = async (e) => {
     if (e) e.preventDefault()
     if (!trackingNumber.trim()) {
-      setParcelError('Please enter a tracking number.')
+      setError('Please enter a tracking number.')
       return
     }
-
-    setParcelLoading(true)
-    setParcelError(null)
-
+    setLoading(true)
+    setError(null)
     try {
-      const result = await trackParcel(trackingNumber, selectedCarrier)
+      const result = await trackParcel(trackingNumber, carrier)
       setActiveParcel(result)
       fetchParcels()
     } catch (err) {
-      setParcelError(err.message || 'Failed to track package. Please check the tracking number.')
+      setError(err.message || 'Failed to track package.')
     } finally {
-      setParcelLoading(false)
+      setLoading(false)
     }
   }
 
-  const resetToHome = () => {
-    setActiveContainer(null)
-    setOceanError(null)
-    setContainerNumber('')
-    window.scrollTo({ top: 0 })
-  }
-
-  const handleDeleteParcel = async (tn, e) => {
+  const handleDelete = async (tn, e) => {
     e.stopPropagation()
     if (!window.confirm(`Remove parcel ${tn} from history?`)) return
-
     try {
       await deleteParcel(tn)
-      if (activeParcel && activeParcel.tracking_number === tn) {
-        setActiveParcel(null)
-      }
+      if (activeParcel?.tracking_number === tn) setActiveParcel(null)
       fetchParcels()
     } catch (err) {
       alert(`Error deleting parcel: ${err.message}`)
     }
   }
 
-  const handleSelectParcel = (parcel) => {
-    setActiveParcel(parcel)
-    setTrackingNumber(parcel.tracking_number)
-    setSelectedCarrier(parcel.carrier || 'auto')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+  const selectParcel = (p) => {
+    setActiveParcel(p)
+    setTrackingNumber(p.tracking_number)
+    setCarrier(p.carrier || 'auto')
+    window.scrollTo({ top: 0 })
   }
 
-  const handleSelectContainer = async (cntr) => {
+  return (
+    <div className="parcel-page">
+      <div className="bg-glow" aria-hidden="true" />
+      <Header onHome={() => navigate('/')} showParcelLink={false} />
+
+      <main className="parcel-main">
+        <p className="eyebrow rise">{'>'} PARCEL MODE</p>
+        <h1 className="page-title rise" style={{ '--d': '100ms' }}>INDIVIDUAL PACKAGES</h1>
+        <p className="tagline left rise" style={{ '--d': '200ms' }}>
+          USPS · FedEx · UPS · DHL · Amazon · OnTrac — auto-detected by format.
+        </p>
+
+        <form className="parcel-form rise" style={{ '--d': '300ms' }} onSubmit={handleTrack} role="search">
+          <input
+            type="text"
+            className="parcel-input"
+            placeholder="ENTER TRACKING NUMBER"
+            value={trackingNumber}
+            onChange={(e) => setTrackingNumber(e.target.value)}
+            disabled={loading}
+            aria-label="Tracking number"
+            autoComplete="off"
+            spellCheck="false"
+          />
+          <select
+            className="parcel-select"
+            value={carrier}
+            onChange={(e) => setCarrier(e.target.value)}
+            disabled={loading}
+            aria-label="Carrier"
+          >
+            {CARRIERS.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <button type="submit" className="hotbar-submit" disabled={loading || !trackingNumber.trim()}>
+            {loading ? <span className="hotbar-spinner" aria-label="Loading" /> : 'TRACE →'}
+          </button>
+        </form>
+
+        {error && <div className="alert" role="alert"><span>! {error}</span></div>}
+
+        {activeParcel && (
+          <article className="panel rise">
+            <div className="panel-head wrap">
+              <div>
+                <span className="result-line">{(activeParcel.carrier || 'CARRIER UNKNOWN').toUpperCase()}</span>
+                <h2 className="parcel-number">{activeParcel.tracking_number}</h2>
+              </div>
+              <span className={`status-tag status-${activeParcel.status || 'unknown'}`}>
+                ● {(activeParcel.status || 'unknown').replace('_', ' ').toUpperCase()}
+              </span>
+            </div>
+
+            <div className="stats">
+              <Stat label="ORIGIN / SENDER" value={activeParcel.sender_address} />
+              <Stat label="DESTINATION" value={activeParcel.recipient_address} />
+              <Stat label="ESTIMATED DELIVERY" value={activeParcel.estimated_delivery} mono />
+              <Stat label="SERVICE" value={activeParcel.service_type} />
+              <Stat label="WEIGHT" value={activeParcel.weight ? `${activeParcel.weight} kg` : null} mono />
+              <Stat label="LAST UPDATED" value={activeParcel.updated_at} mono />
+            </div>
+
+            <Timeline events={activeParcel.events} />
+          </article>
+        )}
+
+        <section className="panel rise" style={{ '--d': '400ms' }}>
+          <div className="panel-head">
+            <span className="panel-title">TRACKED PARCELS</span>
+            <select
+              className="filter-select"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              aria-label="Filter parcels by status"
+            >
+              <option value="all">ALL STATUSES</option>
+              {PARCEL_FILTERS.filter((f) => f !== 'all').map((f) => (
+                <option key={f} value={f}>{f.replace('_', ' ').toUpperCase()}</option>
+              ))}
+            </select>
+          </div>
+
+          {parcelsList.length === 0 ? (
+            <p className="empty-state">No tracked parcels yet.</p>
+          ) : (
+            <ul className="parcel-list">
+              {parcelsList.map((p) => (
+                <li key={p.tracking_number} className="parcel-row">
+                  <button type="button" className="parcel-open" onClick={() => selectParcel(p)}>
+                    <code>{p.tracking_number}</code>
+                    <span className="pr-carrier">{(p.carrier || '').toUpperCase()}</span>
+                    <span className={`status-tag status-sm status-${p.status || 'unknown'}`}>
+                      ● {(p.status || 'unknown').replace('_', ' ')}
+                    </span>
+                    <span className="pr-updated">{p.updated_at}</span>
+                  </button>
+                  <button type="button" className="danger-btn" aria-label={`Remove ${p.tracking_number}`} onClick={(e) => handleDelete(p.tracking_number, e)}>
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <button type="button" className="new-search" onClick={() => navigate('/')}>
+          ← OCEAN FREIGHT
+        </button>
+      </main>
+    </div>
+  )
+}
+
+/* ================= APP ================= */
+
+export default function App() {
+  const [path, navigate] = usePath()
+  const [reduced] = useMemo(prefersReducedMotion, [])
+  const [health, setHealth] = useState('checking')
+
+  // Ocean state
+  const [query, setQuery] = useState('')
+  const [phase, setPhase] = useState('idle') // idle | locating | done
+  const [locatedNumber, setLocatedNumber] = useState('')
+  const [shipment, setShipment] = useState(null)
+  const [error, setError] = useState(null)
+  const [recent, setRecent] = useState([])
+  const liveRef = useRef(null)
+
+  useEffect(() => {
+    checkHealth()
+      .then(() => setHealth('ok'))
+      .catch(() => setHealth('offline'))
+    listContainers('', '', 8)
+      .then((data) => setRecent(data.containers || []))
+      .catch((err) => console.error('Failed to load containers:', err))
+  }, [])
+
+  const announce = (msg) => {
+    if (liveRef.current) liveRef.current.textContent = msg
+  }
+
+  const runTransition = async (num, fetcher) => {
+    setError(null)
+    setLocatedNumber(num.toUpperCase())
+    setPhase('locating')
+    announce(`Locating shipment ${num}`)
+    const minDelay = reduced ? 150 : 1250
     try {
-      const full = await getContainer(cntr)
-      setActiveContainer(full)
-      setContainerNumber(full.container_number || cntr)
-      window.scrollTo({ top: 0 })
+      const [result] = await Promise.all([fetcher(num), sleep(minDelay)])
+      setShipment(result)
+      setQuery(num)
+      setPhase('done')
+      announce(`Shipment ${num} located`)
     } catch (err) {
-      console.error('Failed to load container:', err)
+      setError(err.message || 'Failed to track container shipment.')
+      setPhase('idle')
+      announce('Tracking failed')
     }
   }
 
-  const containerId = activeContainer
-    ? activeContainer.container_number || activeContainer.tracking_number
-    : ''
+  const handleSubmit = (e) => {
+    if (e) e.preventDefault()
+    const num = query.trim()
+    if (!num) {
+      setError('Please enter a container number.')
+      return
+    }
+    runTransition(num, (n) => trackContainer(n))
+  }
+
+  const handleOpenRecent = (num, fillOnly = false) => {
+    if (fillOnly) {
+      setQuery(num)
+      document.querySelector('.hotbar-input')?.focus()
+      return
+    }
+    runTransition(num, (n) => getContainer(n))
+  }
+
+  const newSearch = () => {
+    setShipment(null)
+    setPhase('idle')
+    setQuery('')
+    setError(null)
+    window.scrollTo({ top: 0 })
+    setTimeout(() => document.querySelector('.hotbar-input')?.focus(), 80)
+  }
+
+  if (path === '/parcel') {
+    return (
+      <>
+        <ParcelPage navigate={navigate} />
+        <div ref={liveRef} className="sr-only" aria-live="polite" />
+      </>
+    )
+  }
 
   return (
-    <div className="page">
-      <div className="bg-glow bg-glow-a" aria-hidden="true" />
-      <div className="bg-glow bg-glow-b" aria-hidden="true" />
-
-      <header className="topbar">
-        <button type="button" className="brand" onClick={resetToHome} aria-label="StayTrace home">
-          <BrandMark />
-          <span className="brand-name">StayTrace</span>
-          {!activeContainer && <span className="brand-tag">Shipment intelligence</span>}
-        </button>
-
-        <div className="topbar-right">
-          {activeContainer && (
-            <>
-              <code className="tracking-chip">{containerId}</code>
-              <button type="button" className="ghost-btn" onClick={resetToHome}>
-                New search
-              </button>
-            </>
-          )}
-          <span className="health-pill" title={`API ${health.status} · Database ${health.database ?? 'unknown'}`}>
-            <span className={`health-dot ${health.status}`} aria-hidden="true" />
-            API {health.status}
-          </span>
-        </div>
-      </header>
+    <div className="app">
+      <div className="bg-glow" aria-hidden="true" />
+      <Header onHome={newSearch} onParcel={() => navigate('/parcel')} />
 
       <main className="main">
-        {/* ================= HOME ================= */}
-        {!activeContainer && (
-          <div className="home fade-in">
-            <section className="hero">
-              <p className="hero-eyebrow">Shipment intelligence</p>
-              <h1 className="hero-title">
-                Track any shipment,
-                <br />
-                across every carrier.
-              </h1>
-              <p className="hero-sub">
-                Ocean containers and parcels — normalized from raw carrier sources with a
-                self-healing extraction engine.
-              </p>
+        <div ref={liveRef} className="sr-only" aria-live="polite" />
 
-              <TrackingSearch
-                value={containerNumber}
-                onChange={(e) => setContainerNumber(e.target.value)}
-                onSubmit={handleTrackContainer}
-                loading={oceanLoading}
-                placeholder="Enter container / tracking number"
-                options={SHIPPING_LINES}
-                selectValue={selectedLine}
-                onSelectChange={(e) => setSelectedLine(e.target.value)}
-                buttonLabel={oceanLoading ? 'Tracking' : 'Track'}
-              />
-
-              <p className="carrier-marquee" aria-label="Supported shipping lines">
-                {LINE_MARQUEE.join(' · ')}
-              </p>
-
-              <div className="hero-secondary">
-                Tracking an individual package?
-                <button type="button" className="link-btn" onClick={() => setMode(mode === 'parcel' ? 'ocean' : 'parcel')}>
-                  {mode === 'parcel' ? 'Hide parcel tracking' : 'Track a parcel'}
-                </button>
-              </div>
-
-              {mode === 'parcel' && (
-                <div className="parcel-panel slide-down">
-                  <TrackingSearch
-                    value={trackingNumber}
-                    onChange={(e) => setTrackingNumber(e.target.value)}
-                    onSubmit={handleTrackParcel}
-                    loading={parcelLoading}
-                    placeholder="Enter tracking number (e.g. 94001…, 1Z999…)"
-                    options={CARRIERS}
-                    selectValue={selectedCarrier}
-                    onSelectChange={(e) => setSelectedCarrier(e.target.value)}
-                    buttonLabel={parcelLoading ? 'Tracking' : 'Track'}
-                    size="md"
-                  />
-
-                  {activeParcel && (
-                    <article className="parcel-result rise">
-                      <ShipmentHeader
-                        number={activeParcel.tracking_number}
-                        line={(activeParcel.carrier || 'Carrier unknown').toUpperCase()}
-                        status={activeParcel.status}
-                      />
-                      <ShipmentStats
-                        items={[
-                          { label: 'Origin / Sender', value: activeParcel.sender_address || 'Not available', muted: !activeParcel.sender_address },
-                          { label: 'Destination', value: activeParcel.recipient_address || 'Not available', muted: !activeParcel.recipient_address },
-                          { label: 'Estimated delivery', value: activeParcel.estimated_delivery || 'Pending', muted: !activeParcel.estimated_delivery },
-                          { label: 'Service', value: activeParcel.service_type || 'Standard' },
-                          { label: 'Weight', value: activeParcel.weight ? `${activeParcel.weight} kg` : 'N/A', muted: !activeParcel.weight },
-                          { label: 'Last updated', value: activeParcel.updated_at || 'Just now' },
-                        ]}
-                      />
-                      <Timeline events={activeParcel.events} />
-                    </article>
-                  )}
-
-                  {parcelError && (
-                    <div className="alert" role="alert">
-                      <span>{parcelError}</span>
-                      <button type="button" className="ghost-btn" onClick={() => handleTrackParcel()}>
-                        Retry
-                      </button>
-                    </div>
-                  )}
-
-                  {parcelsList.length > 0 && (
-                    <div className="parcel-history">
-                      <div className="parcel-history-head">
-                        <h3 className="mini-title">Recent parcels</h3>
-                        <select
-                          className="filter-select"
-                          value={filterStatus}
-                          onChange={(e) => setFilterStatus(e.target.value)}
-                          aria-label="Filter parcels by status"
-                        >
-                          <option value="all">All statuses</option>
-                          <option value="in_transit">In transit</option>
-                          <option value="out_for_delivery">Out for delivery</option>
-                          <option value="delivered">Delivered</option>
-                          <option value="pre_transit">Pre-transit</option>
-                          <option value="exception">Exception</option>
-                        </select>
-                      </div>
-                      <ul className="ship-list">
-                        {parcelsList.map((p) => (
-                          <li key={p.tracking_number}>
-                            <div
-                              className="ship-row"
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => handleSelectParcel(p)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault()
-                                  handleSelectParcel(p)
-                                }
-                              }}
-                            >
-                              <span className="ship-row-num">{p.tracking_number}</span>
-                              <span className="ship-row-line">{(p.carrier || '').toUpperCase()}</span>
-                              <span className={`status-pill status-sm status-${p.status || 'unknown'}`}>
-                                <span className="status-pill-dot" aria-hidden="true" />
-                                {p.status ? p.status.replace('_', ' ') : 'unknown'}
-                              </span>
-                              <span className="ship-row-meta">{p.updated_at}</span>
-                              <svg className="ship-row-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                                <path d="m9 18 6-6-6-6" />
-                              </svg>
-                            </div>
-                            <button
-                              type="button"
-                              className="danger-btn"
-                              aria-label={`Remove parcel ${p.tracking_number}`}
-                              onClick={(e) => handleDeleteParcel(p.tracking_number, e)}
-                            >
-                              Remove
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-
-            {oceanLoading && (
-              <section className="loading-strip" role="status" aria-live="polite">
-                <span className="spinner spinner-dark" />
-                Locating shipment and extracting checkpoints…
-              </section>
-            )}
-
-            {oceanError && (
-              <div className="alert" role="alert">
-                <span>{oceanError}</span>
-                <button type="button" className="ghost-btn" onClick={() => handleTrackContainer()}>
-                  Retry
-                </button>
-              </div>
-            )}
-
-            <SelfHealingDemo onNotify={setOceanError} />
-
-            <ShipmentList
-              title="Recent ocean shipments"
-              items={containersList}
-              emptyMessage="No tracked ocean shipments yet. Enter a container number above to begin."
-              onSelect={handleSelectContainer}
-              renderMeta={(c) =>
-                `${c.origin_port || '?'} → ${c.destination_port || '?'}${c.updated_at ? ` · ${c.updated_at}` : ''}`
-              }
-            />
-          </div>
+        {phase !== 'done' && (
+          <Home
+            query={query}
+            setQuery={setQuery}
+            onSubmit={handleSubmit}
+            locating={phase === 'locating'}
+            error={error}
+            reduced={reduced}
+            recent={recent}
+            onOpenRecent={handleOpenRecent}
+            goParcel={() => navigate('/parcel')}
+          />
         )}
 
-        {/* ================= RESULT WORKSPACE ================= */}
-        {activeContainer && (
-          <div className="workspace fade-in">
-            <ShipmentHeader
-              number={containerId}
-              line={(activeContainer.shipping_line || 'Shipping line').toUpperCase()}
-              status={activeContainer.status}
-              labels={OCEAN_STATUS_LABELS}
-            />
+        {phase === 'locating' && <Locating number={locatedNumber} done={false} />}
 
-            <RouteProgress shipment={activeContainer} />
-
-            <ExtractionHealth shipment={activeContainer} />
-
-            <ShipmentStats
-              items={[
-                { label: 'Vessel', value: activeContainer.vessel_name || 'Not available', muted: !activeContainer.vessel_name },
-                { label: 'Voyage', value: activeContainer.voyage_number || 'Not available', muted: !activeContainer.voyage_number },
-                { label: 'Current location', value: activeContainer.current_location || activeContainer.destination_port || 'Pending', muted: !(activeContainer.current_location || activeContainer.destination_port) },
-                { label: 'ETA at destination', value: activeContainer.estimated_arrival || 'Pending', muted: !activeContainer.estimated_arrival },
-                { label: 'Actual departure', value: activeContainer.actual_departure || 'Not departed', muted: !activeContainer.actual_departure },
-                { label: 'Last updated', value: activeContainer.updated_at || 'Just now' },
-              ]}
-            />
-
-            <section className="panel timeline-panel">
-              <div className="panel-head">
-                <h2 className="panel-title">Tracking history</h2>
-                <span className="count-chip">{activeContainer.events?.length || 0} checkpoints</span>
-              </div>
-              <Timeline events={activeContainer.events} />
-            </section>
-
-            {containersList.length > 0 && (
-              <ShipmentList
-                title="Other tracked shipments"
-                items={containersList.filter(
-                  (c) => (c.container_number || c.tracking_number) !== containerId
-                )}
-                emptyMessage=""
-                onSelect={handleSelectContainer}
-                renderMeta={(c) => `${c.origin_port || '?'} → ${c.destination_port || '?'}`}
-              />
-            )}
-          </div>
+        {phase === 'done' && shipment && (
+          <ResultView shipment={shipment} onNewSearch={newSearch} />
         )}
       </main>
-
-      <footer className="footer">
-        StayTrace — self-healing shipment intelligence
-      </footer>
     </div>
   )
 }

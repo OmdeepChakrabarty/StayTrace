@@ -22,21 +22,21 @@ export default function Timeline({ events, emptyMessage = 'No checkpoint events 
         <li
           key={idx}
           className="timeline-item"
-          style={{ animationDelay: `${Math.min(idx * 60, 480)}ms` }}
+          style={{ animationDelay: `${Math.min(idx * 70, 560)}ms` }}
         >
           <span className={`timeline-dot ${idx === 0 ? 'latest' : ''}`} aria-hidden="true" />
           <div className="timeline-body">
-            <time className="timeline-time">{formatTimestamp(ev.timestamp)}</time>
+            <time className="timeline-time">[{formatTimestamp(ev.timestamp)}]</time>
             <p className="timeline-desc">{ev.description || ev.status || 'Checkpoint'}</p>
             {(ev.vessel || ev.voyage) && (
               <span className="timeline-meta">
-                {ev.vessel || ''}
-                {ev.voyage ? ` · Voyage ${ev.voyage}` : ''}
+                &gt; {ev.vessel || ''}
+                {ev.voyage ? ` · VOY ${ev.voyage}` : ''}
               </span>
             )}
             {ev.location && (
               <span className="timeline-meta">
-                {ev.location}
+                &gt; {ev.location}
                 {ev.location_code ? ` (${ev.location_code})` : ''}
               </span>
             )}
