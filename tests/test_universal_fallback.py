@@ -42,10 +42,11 @@ def _shell_response():
 
 def test_generic_ocean_carrier_shell_uses_generic_browser_fallback(svc, monkeypatch):
     """COSCO has no carrier-specific plan: shell page must escalate through
-    the generic rendered-form fallback against its official URL."""
+    the generic rendered-form fallback against its official URL (the
+    elines.coscoshipping.com SCCT app that auto-searches ?number=)."""
     service, mock_client, _ = svc
     mock_client.build_tracking_url.return_value = (
-        "https://lines.coscoshipping.com/ebusiness/cargoTracking?searchType=CONTAINER&trackingNo=COSU1234567"
+        "https://elines.coscoshipping.com/scct/public/ct/base?lang=en&trackingType=CONTAINER&number=COSU1234567"
     )
     mock_client.unlock_url.return_value = _shell_response()
 
@@ -60,7 +61,7 @@ def test_generic_ocean_carrier_shell_uses_generic_browser_fallback(svc, monkeypa
     container, status_code = service.track_container("COSU1234567", shipping_line="cosco", fetch_live=True)
 
     assert calls == [(
-        "https://lines.coscoshipping.com/ebusiness/cargoTracking?searchType=CONTAINER&trackingNo=COSU1234567",
+        "https://elines.coscoshipping.com/scct/public/ct/base?lang=en&trackingType=CONTAINER&number=COSU1234567",
         "COSU1234567",
     )]
     assert container["container_number"] == "COSU1234567"

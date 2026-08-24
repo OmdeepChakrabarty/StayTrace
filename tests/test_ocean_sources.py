@@ -415,3 +415,151 @@ def test_maersk_parsed_fixture_normalizes_to_canonical_schema():
     assert normalized["events"][9]["status"] == "unknown"  # Discharge (VESSEL / VOY) suffix
     assert normalized["events"][14]["status"] == "gate_out"  # Gate out for delivery
     assert first["source"] == "carrier"
+
+
+# ---------------------------------------------------------------------------
+# COSCO browser-fallback target and structured parsing of the rendered SCCT
+# results page
+# ---------------------------------------------------------------------------
+
+COSCO_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "ocean"
+
+
+def test_cosco_tracking_url_targets_auto_searching_scct_app():
+    """
+    lines.coscoshipping.com serves only a JS application shell whose tracking
+    iframe carries an EMPTY number parameter, so a stateless fetch can never
+    show results. The SCCT app hosted on elines.coscoshipping.com auto-runs
+    the search from its own ?number= query when rendered, so the adapter must
+    target it directly - that URL is what both the stateless Web Unlocker
+    pass and the generic rendered-browser fallback request.
+    """
+    adapter = default_ocean_registry.get_adapter("cosco")
+    url = adapter.build_tracking_url(" cosu1234567 ")
+    assert url == (
+        "https://elines.coscoshipping.com/scct/public/ct/base"
+        "?lang=en&trackingType=CONTAINER&number=COSU1234567"
+    )
+    assert url == COSCOOceanAdapter().build_tracking_url("COSU1234567")
+
+    # The escalation design relies on staying on the generic rendered-form
+    # fallback path (no upfront session, no carrier-specific plan).
+    assert adapter.requires_browser is False
+    assert adapter.browser_fallback is False
+
+
+def test_cosco_parse_official_response_maps_hydrated_results():
+    html = (COSCO_FIXTURES_DIR / "cosco_tracking.html").read_text(encoding="utf-8")
+    adapter = default_ocean_registry.get_adapter("cosco")
+    parsed = adapter.parse_official_response(html)
+    assert parsed is not None
+
+    assert parsed["container_number"] == "FCIU9480317"
+    assert parsed["tracking_number"] == "FCIU9480317"
+    assert parsed["shipping_line"] == "cosco"
+
+    # Status is the newest timeline event description (raw carrier wording).
+    assert parsed["status"] == "Vessel departure from First POL"
+
+    # ETA comes from the date block rendered before the 'Last Pod Eta' label,
+    # converted deterministically to ISO 8601 UTC.
+    assert parsed["estimated_arrival"] == "2026-10-09T06:00:00Z"
+
+    # Events: hydrated rows only ('YYYY-MM-DD HH:MM:SS' -> ISO 8601 UTC),
+    # column order taken from the rendered header labels.
+    events = parsed["events"]
+    assert len(events) == 1
+    assert events[0]["timestamp"] == "2026-08-19T04:14:41Z"
+    assert events[0]["description"] == "Vessel departure from First POL"
+    assert events[0]["location"] == "Gaevle Containerterminal AB"
+    assert events[0]["transport_mode"] == "Feeder"
+    assert events[0]["source"] == "carrier"
+
+
+def test_cosco_parse_official_response_returns_none_without_results():
+    adapter = default_ocean_registry.get_adapter("cosco")
+    # Application shells observed live (parent page and SCCT app pre-search):
+    # no rendered container number and no timeline rows - fall back safely.
+    parent_shell = (
+        "<!DOCTYPE html><html lang=\"\"><head><title>COSCO SHIPPING Lines</title>"
+        "</head><body><noscript><strong>We're sorry but homevue3 doesn't work "
+        "properly without JavaScript enabled.</strong></noscript>"
+        "<div id=\"app\"></div></body></html>"
+    )
+    scct_shell = (
+        '<!DOCTYPE html><html lang="en"><head><title>SCCT</title></head>'
+        '<body class="font-default"><div id="app"></div></body></html>'
+    )
+    assert adapter.parse_official_response(parent_shell) is None
+    assert adapter.parse_official_response(scct_shell) is None
+    # A rendered but empty results table (not-found response): never fabricate.
+    not_found = (
+        '<html><body><div class="ant-table"><div class="ant-table-container">'
+        '<div class="ant-table-content"><table style="table-layout: auto;">'
+        '<thead class="ant-table-thead"><tr>'
+        '<th class="ant-table-cell">Dynamic Node</th>'
+        '<th class="ant-table-cell">Event Time</th>'
+        "</tr></thead>"
+        '<tbody class="ant-table-tbody"></tbody>'
+        "</table></div></div></div></body></html>"
+    )
+    assert adapter.parse_official_response(not_found) is None
+    assert adapter.parse_official_response("") is None
+
+
+def test_cosco_timeline_rows_without_dates_are_skipped_and_order_is_chronological():
+    """Unhydrated template rows carry no date and must be skipped; emitted
+    events are chronological even if the DOM lists them newest-first."""
+    html = (
+        '<html><body><table><thead class="ant-table-thead"><tr>'
+        '<th class="ant-table-cell">Dynamic Node</th>'
+        '<th class="ant-table-cell">Event Time</th>'
+        '<th class="ant-table-cell">Event Location</th>'
+        "</tr></thead>"
+        '<tbody class="ant-table-tbody">'
+        '<tr class="ant-table-row"><td class="ant-table-cell">'
+        "<div><span>Discharged at Last POD</span></div></td>"
+        '<td class="ant-table-cell"><div><span></span></div></td>'  # template row
+        '<td class="ant-table-cell"></td></tr>'
+        '<tr class="ant-table-row"><td class="ant-table-cell">'
+        "<div><span>Vessel departure from First POL</span></div></td>"
+        '<td class="ant-table-cell"><div><span>2026-08-19 04:14:41</span></div></td>'
+        '<td class="ant-table-cell">Gaevle Containerterminal AB</td></tr>'
+        '<tr class="ant-table-row"><td class="ant-table-cell">'
+        "<div><span>Loaded at First POL</span></div></td>"
+        '<td class="ant-table-cell"><div><span>2026-08-18 18:36</span></div></td>'
+        '<td class="ant-table-cell">Gaevle Containerterminal AB</td></tr>'
+        "</tbody></table>"
+        "<div>FCIU9480317</div>"
+        "</body></html>"
+    )
+    adapter = default_ocean_registry.get_adapter("cosco")
+    parsed = adapter.parse_official_response(html)
+    assert parsed is not None
+    assert [e["timestamp"] for e in parsed["events"]] == [
+        "2026-08-18T18:36:00Z",
+        "2026-08-19T04:14:41Z",
+    ]
+    assert parsed["events"][0]["description"] == "Loaded at First POL"
+    assert parsed["status"] == "Vessel departure from First POL"
+
+
+def test_cosco_parsed_fixture_normalizes_to_canonical_schema():
+    from pipeline.normalize import normalize_container_shipment
+
+    html = (COSCO_FIXTURES_DIR / "cosco_tracking.html").read_text(encoding="utf-8")
+    adapter = default_ocean_registry.get_adapter("cosco")
+    parsed = adapter.parse_official_response(html)
+    normalized = normalize_container_shipment(parsed)
+
+    assert normalized["container_number"] == "FCIU9480317"
+    assert normalized["shipping_line"] == "cosco"
+    assert normalized["estimated_arrival"] == "2026-10-09T06:00:00Z"
+    assert len(normalized["events"]) == 1
+    first = normalized["events"][0]
+    assert first["timestamp"] == "2026-08-19T04:14:41Z"
+    # Carrier descriptions normalize through the shared ocean status map;
+    # the newest move drives the shipment status.
+    assert first["status"] == "in_transit"  # Vessel departure from First POL
+    assert normalized["status"] == "in_transit"
+    assert first["source"] == "carrier"

@@ -574,14 +574,168 @@ class CMACGMOceanAdapter(OceanSourceAdapter):
 
 
 class COSCOOceanAdapter(OceanSourceAdapter):
-    """COSCO Shipping Lines official tracking adapter."""
+    """
+    COSCO Shipping Lines official tracking adapter.
+
+    lines.coscoshipping.com serves only a JavaScript application shell: the
+    tracking UI is an Ant Design Vue app (SCCT) hosted on
+    elines.coscoshipping.com which the parent page embeds inside a
+    #scctCargoTracking iframe whose src carries an EMPTY number parameter -
+    so neither page ever contains server-rendered or embedded-JSON tracking
+    state, and a stateless fetch of the old cargoTracking URL can never show
+    results. The SCCT app itself auto-runs the search from its own
+    ?number= query parameter when rendered in a browser session, so this
+    adapter targets it directly: the generic rendered-browser fallback
+    (success = searched reference present in rendered innerText) renders the
+    hydrated results, and parse_official_response() maps them
+    deterministically into the canonical raw schema.
+    """
+    # SCCT renders milestone/ETA times as 'YYYY-MM-DD HH:MM[:SS]' carrier
+    # wall-clock strings; converted explicitly to ISO 8601 UTC during parsing
+    # so day/month are never swapped heuristically.
+    _DATE_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")
+
     carrier_id = "cosco"
     display_name = "COSCO Shipping Lines"
     supported_prefixes = ("COSU", "CCLU", "CBHU")
 
     def build_tracking_url(self, container_number: str) -> str:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
-        return f"https://lines.coscoshipping.com/ebusiness/cargoTracking?searchType=CONTAINER&trackingNo={clean}"
+        return (
+            "https://elines.coscoshipping.com/scct/public/ct/base"
+            f"?lang=en&trackingType=CONTAINER&number={clean}"
+        )
+
+    @staticmethod
+    def _clean(text: Optional[str]) -> str:
+        """Collapse whitespace runs left by the component rendering."""
+        return re.sub(r"\s+", " ", text or "").strip()
+
+    def _parse_cosco_date(self, raw: Optional[str]) -> Optional[str]:
+        """Convert SCCT's 'YYYY-MM-DD [HH:MM[:SS]]' rendering into ISO 8601 UTC."""
+        cleaned = self._clean(raw)
+        if not cleaned:
+            return None
+        for fmt in self._DATE_FORMATS:
+            try:
+                dt = datetime.strptime(cleaned, fmt)
+                return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                continue
+        return None
+
+    def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse COSCO's rendered SCCT results page into the canonical raw
+        container schema. The app hydrates values as plain DOM:
+
+          bold inline-styled div                container number header
+          div + span pair labelled 'Last Pod Eta'  estimated arrival
+          table (.ant-table-thead / .ant-table-tbody)  event timeline whose
+              header labels ('Dynamic Node', 'Event Time', 'Event Location',
+              'Transport Mode') fix the column order
+
+        Returns None when no rendered tracking results exist (application
+        shell or an empty not-found response) so callers fail safely and
+        never fabricate data.
+        """
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:  # pragma: no cover - bs4 is a hard repo dependency
+            return None
+
+        soup = BeautifulSoup(html or "", "html.parser")
+
+        # Container number: the results header renders it as standalone text.
+        container_number = None
+        for element in soup.find_all(["div", "span"]):
+            text = element.get_text(strip=True)
+            if re.fullmatch(r"[A-Z]{4}\d{7}", text or ""):
+                container_number = text
+                break
+
+        # Event timeline: column order comes from the rendered header labels.
+        header_map: Dict[str, int] = {}
+        for index, th in enumerate(soup.select(".ant-table-thead th")):
+            label = self._clean(th.get_text()).lower()
+            if "node" in label:
+                header_map["description"] = index
+            elif "time" in label:
+                header_map["timestamp"] = index
+            elif "location" in label:
+                header_map["location"] = index
+            elif "mode" in label:
+                header_map["transport_mode"] = index
+
+        events: List[Dict[str, Any]] = []
+        if {"description", "timestamp"} <= set(header_map):
+            for row in soup.select(".ant-table-tbody tr"):
+                cells = [self._clean(td.get_text(" ")) for td in row.find_all("td")]
+                ts_index = header_map["timestamp"]
+                if ts_index >= len(cells):
+                    continue
+                timestamp = self._parse_cosco_date(cells[ts_index])
+                # Rows without a rendered date are unhydrated templates - skip.
+                if not timestamp:
+                    continue
+
+                def field(key: str) -> Optional[str]:
+                    idx = header_map.get(key)
+                    if idx is None or idx >= len(cells) or not cells[idx]:
+                        return None
+                    return cells[idx]
+
+                description = field("description")
+                events.append(
+                    {
+                        "timestamp": timestamp,
+                        "status": description,
+                        "description": description,
+                        "location": field("location"),
+                        "transport_mode": field("transport_mode"),
+                        "source": "carrier",
+                    }
+                )
+        # Emit deterministic chronological order regardless of DOM order.
+        events.sort(key=lambda ev: ev["timestamp"])
+
+        # Estimated arrival: a date block rendered directly before its
+        # 'Last Pod Eta' label.
+        estimated_arrival = None
+        for label in soup.find_all(["span", "div", "th", "td"]):
+            if label.find_all(True):
+                continue
+            if self._clean(label.get_text()).lower() != "last pod eta":
+                continue
+            node = label.parent
+            for _ in range(3):
+                if node is None:
+                    break
+                sibling = node.find_previous_sibling()
+                while sibling is not None and estimated_arrival is None:
+                    text = self._clean(sibling.get_text(" "))
+                    if text and len(text) <= 32:
+                        estimated_arrival = self._parse_cosco_date(text)
+                    sibling = sibling.find_previous_sibling()
+                node = node.parent
+            break
+
+        if not container_number and not events:
+            return None
+
+        return {
+            "container_number": container_number,
+            "tracking_number": container_number,
+            "shipping_line": self.carrier_id,
+            # The newest timeline move is the current shipment status.
+            "status": (events[-1].get("description") if events else None),
+            "vessel_name": None,
+            "voyage_number": None,
+            "origin_port": None,
+            "destination_port": None,
+            "estimated_arrival": estimated_arrival,
+            "events": events,
+        }
 
 
 class HapagLloydOceanAdapter(OceanSourceAdapter):
