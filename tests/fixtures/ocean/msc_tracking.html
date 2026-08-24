@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Fixture: MSC (msc.com) track-a-shipment rendered results page.
+  Mirrors the real hydrated Alpine.js DOM observed in a live Scraping
+  Browser session for container MSCU5285725 (Chattogram BD -> Veracruz MX
+  via Colombo LK). Scripts/analytics removed; template scaffolding trimmed
+  while preserving the exact class names, headings, and value formats
+  (dd/MM/yyyy dates, "City,  CC" double-space location strings) that
+  MSCOceanAdapter.parse_official_response() relies on.
+-->
+<head><title>Shipping Container Tracking and Tracing | MSC</title></head>
+<body>
+<div class="msc-flow-tracking separator--bottom-medium"
+     x-data="mscFlowTracking()"
+     data-api-url="/api/feature/tools/TrackingInfo">
+  <div class="grid-container">
+    <div class="cell small-12">
+      <div class="msc-flow-tracking__wrapper" x-ref="results">
+        <div class="msc-flow-tracking__results">
+          <div :data-index="0">
+            <div class="msc-flow-tracking__result" x-data="mscFlowTrackingResult()">
+              <div class="msc-flow-tracking__subheading">
+                <h3 class="msc-flow-tracking__subtitle">
+                  <span x-text="title">Container</span>
+                  <span x-text="trackingNumber">MSCU5285725</span>
+                </h3>
+              </div>
+              <div class="msc-flow-tracking__details">
+                <ul>
+                  <li>
+                    <div x-show="type === 'Container'">
+                      <span class="msc-flow-tracking__details-heading">Container Number</span>
+                      <span class="msc-flow-tracking__details-value" x-text="getContainerNumber()">MSCU5285725</span>
+                    </div>
+                    <div x-show="type !== 'Container'" style="display: none;">
+                      <span class="msc-flow-tracking__details-heading">Bill of Lading:</span>
+                      <span class="msc-flow-tracking__details-value" x-text="result.BillOfLadingNumber">MEDUJS999038</span>
+                    </div>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Shipped From</span>
+                    <span class="msc-flow-tracking__details-value" x-text="convertToSentenceCaseLocation(result.GeneralTrackingInfo.ShippedFrom)">Chattogram,  BD</span>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Port of Load</span>
+                    <span class="msc-flow-tracking__details-value">
+                      <span x-text="convertToSentenceCaseLocation(result.GeneralTrackingInfo.PortOfLoad)">Chattogram,  BD</span>
+                      <span x-show="result.GeneralTrackingInfo.PortOfLoadLocationCode" x-cloak="">(</span><span x-text="result.GeneralTrackingInfo.PortOfLoadLocationCode"></span><span x-show="result.GeneralTrackingInfo.PortOfLoadLocationCode" x-cloak="">)</span>
+                    </span>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Port of Discharge</span>
+                    <span class="msc-flow-tracking__details-value">
+                      <span x-text="convertToSentenceCaseLocation(result.GeneralTrackingInfo.PortOfDischarge)">Veracruz,  MX</span>
+                      <span x-show="result.GeneralTrackingInfo.PortOfDischargeLocationCode" x-cloak="">(</span><span x-text="result.GeneralTrackingInfo.PortOfDischargeLocationCode"></span><span x-show="result.GeneralTrackingInfo.PortOfDischargeLocationCode" x-cloak="">)</span>
+                    </span>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Shipped To</span>
+                    <span class="msc-flow-tracking__details-value" x-text="convertToSentenceCaseLocation(result.GeneralTrackingInfo.ShippedTo)">Veracruz,  MX</span>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Transhipment</span>
+                    <span class="msc-flow-tracking__details-value" x-text="convertToSentenceCaseLocation(item)">Colombo,  LK</span>
+                  </li>
+                  <li>
+                    <span class="msc-flow-tracking__details-heading">Price Calculation Date*</span>
+                    <span class="msc-flow-tracking__details-value" x-text="result.GeneralTrackingInfo.PriceCalculationDate">20/05/2026</span>
+                  </li>
+                </ul>
+              </div>
+              <div class="msc-flow-tracking__containers">
+                <h4 class="subtitle">Containers</h4>
+                <div class="msc-flow-tracking__container" x-data="mscFlowTrackingContainer()">
+                  <div class="msc-flow-tracking__bar" :class="{'open': open}">
+                    <div class="msc-flow-tracking__content">
+                      <div class="msc-flow-tracking__cell msc-flow-tracking__cell--one msc-flow-tracking__cell--first">
+                        <div class="msc-flow-tracking__cell-flex">
+                          <div class="msc-flow-tracking__data">
+                            <span class="data-heading">Container</span>
+                            <span class="data-value" x-text="container.ContainerNumber">MSCU5285725</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                        <div class="msc-flow-tracking__cell-flex">
+                          <div class="msc-flow-tracking__data">
+                            <span class="data-heading">Type</span>
+                            <span class="data-value" x-text="container.ContainerType">40' HIGH CUBE</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                        <div class="msc-flow-tracking__cell-flex">
+                          <div class="msc-flow-tracking__data">
+                            <span class="data-heading">Latest move</span>
+                            <span class="data-value" x-text="container.LatestMove">VERACRUZ, MX</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four">
+                        <div class="msc-flow-tracking__cell-flex">
+                          <div class="msc-flow-tracking__data" x-show="container.PodEtaDate">
+                            <span class="data-heading">POD ETA</span>
+                            <span class="data-value" x-text="container.PodEtaDate"></span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="msc-flow-tracking__timeline">
+                    <!-- Newest-first timeline as rendered by the SPA. The last
+                         row is an unhydrated Alpine template row (empty values)
+                         exactly as it appears in the captured DOM. -->
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--over">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-step mobile hide-for-large current"></span>
+                          <span class="data-value" x-text="event.Date">30/07/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Veracruz,  MX</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Empty received at CY</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--grey">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">28/07/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Veracruz,  MX</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Import to consignee</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--grey">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">24/07/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Veracruz,  MX</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Import Discharged from Vessel</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--yellow">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">08/06/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Colombo,  LK</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Full Transshipment Loaded</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--yellow">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">06/06/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Colombo,  LK</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Full Transshipment Discharged</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--yellow">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">31/05/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Chattogram,  BD</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Export Loaded on Vessel</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="msc-flow-tracking__port">
+                      <div class="msc-flow-tracking__step msc-flow-tracking__step--start">
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                          <span class="data-value" x-text="event.Date">20/05/2026</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                          <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Chattogram,  BD</span>
+                        </div>
+                        <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                          <span class="data-value" x-text="event.Description">Empty to Shipper</span>
+                        </div>
+                      </div>
+                    </div>
+                    <template x-for="(event, idx) in orderedEvents">
+                      <div class="msc-flow-tracking__port">
+                        <div class="msc-flow-tracking__step" :class="dynamicStepClass(idx).container">
+                          <div class="msc-flow-tracking__cell msc-flow-tracking__cell--two">
+                            <span class="data-value" x-text="event.Date"></span>
+                          </div>
+                          <div class="msc-flow-tracking__cell msc-flow-tracking__cell--three">
+                            <span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)"></span>
+                          </div>
+                          <div class="msc-flow-tracking__cell msc-flow-tracking__cell--four msc-flow-tracking__cell--container">
+                            <span class="data-value" x-text="event.Description"></span>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

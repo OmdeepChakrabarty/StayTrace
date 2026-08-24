@@ -9,7 +9,8 @@ from __future__ import annotations
 import abc
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 
 class UnsupportedOceanCarrierError(ValueError):
@@ -80,13 +81,29 @@ def _rendered_reference_success_js(reference: str) -> str:
 
 
 class MSCOceanAdapter(OceanSourceAdapter):
-    """MSC Mediterranean Shipping Company official tracking adapter."""
+    """
+    MSC Mediterranean Shipping Company official tracking adapter.
+
+    msc.com/track-a-shipment is an Alpine.js single-page app. Tracking state
+    is fetched by an authenticated XHR (POST /api/feature/tools/TrackingInfo)
+    and hydrated into the DOM as plain text inside stable containers - there
+    is no embedded JSON blob. The SPA ignores a plain ?trackingNumber= query
+    parameter (its init() only auto-searches from a base64-encoded "params"
+    query, which msc.com/robots.txt disallows), so results can only be
+    produced by filling the official search form and submitting it within a
+    real browser session.
+    """
+    # MSC's own date format across the rendered page (dd/MM/yyyy), confirmed
+    # in the site bundle (format "dd/MM/yyyy HH:mm"); converted explicitly to
+    # ISO 8601 UTC during parsing so day/month are never swapped heuristically.
+    _DATE_FORMATS = ("%d/%m/%Y %H:%M", "%d/%m/%Y")
+
     carrier_id = "msc"
     display_name = "MSC Mediterranean Shipping Company"
     supported_prefixes = ("MSCU", "MEDU")
-    # msc.com is a JavaScript single-page app: a stateless fetch returns the
-    # application shell without tracking state, so extraction escalates to a
-    # real browser session that renders the results for the queried container.
+    # A stateless fetch returns only the application shell without tracking
+    # state, so extraction escalates to a real browser session that drives
+    # the official search form and renders the results.
     browser_fallback = True
 
     def build_tracking_url(self, container_number: str) -> str:
@@ -96,12 +113,151 @@ class MSCOceanAdapter(OceanSourceAdapter):
     def get_browser_plan(self, container_number: str) -> Dict[str, Any]:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
         return {
-            "start_url": self.build_tracking_url(clean),
-            # The SPA reads the trackingNumber query parameter and renders the
-            # shipment result automatically; no form interaction is required.
+            # Plain URL: robots.txt disallows the "?params=" deep link the SPA
+            # would need to auto-search, and a bare ?trackingNumber= query is
+            # ignored by the application.
+            "start_url": "https://www.msc.com/en/track-a-shipment",
+            # Official search form (Alpine): input#trackingNumber with
+            # x-model binding, submit button inside .msc-flow-tracking.
+            "ready_selector": "#trackingNumber",
+            "fill": {"selector": "#trackingNumber", "value": clean},
+            "submit": ".msc-flow-tracking .msc-search-autocomplete__search",
             "success_js": _rendered_reference_success_js(clean),
-            "max_page_wait": 45.0,
-            "overall_timeout": 90.0,
+            # Measured on live Scraping Browser sessions: page load fires
+            # between ~1s and ~150s (slow third-party resources), while the
+            # XHR result renders ~3-10s after submit. max_page_wait bounds
+            # the post-load interaction/result window; overall_timeout stays
+            # within the service's declared bound for SPA fallback plans,
+            # with fetch_carrier_page_via_browser's fresh-session retry
+            # covering occasional slow page loads.
+            "max_page_wait": 60.0,
+            "overall_timeout": 120.0,
+        }
+
+    @staticmethod
+    def _clean(text: Optional[str]) -> str:
+        """
+        Collapse whitespace runs (rendered values contain doubles like
+        'City,  CC') and drop leftover empty location-code parentheses -
+        msc.com renders literal '()' spans around PortOfLoad/PodLocationCode
+        even when the code itself is absent.
+        """
+        cleaned = re.sub(r"\s+", " ", text or "").strip()
+        cleaned = re.sub(r"\(\s*\)", "", cleaned)
+        return re.sub(r"\s+", " ", cleaned).strip(" ,")
+
+    def _parse_msc_date(self, raw: Optional[str]) -> Optional[str]:
+        """Convert MSC's dd/MM/yyyy [HH:MM] rendering into ISO 8601 UTC."""
+        cleaned = self._clean(raw)
+        if not cleaned:
+            return None
+        for fmt in self._DATE_FORMATS:
+            try:
+                dt = datetime.strptime(cleaned, fmt)
+                return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                continue
+        return None
+
+    def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse MSC's rendered track-a-shipment page into the canonical raw
+        container schema. The SPA hydrates values as plain text inside stable
+        containers:
+
+          .msc-flow-tracking__details-heading / __details-value  shipment facts
+          .msc-flow-tracking__data (.data-heading / .data-value) container bar
+          .msc-flow-tracking__step                               event timeline
+
+        Returns None when no rendered tracking results exist (application
+        shell or a "No results found" response) so callers fail safely and
+        never fabricate data.
+        """
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:  # pragma: no cover - bs4 is a hard repo dependency
+            return None
+
+        soup = BeautifulSoup(html or "", "html.parser")
+        if not soup.select_one(".msc-flow-tracking__result"):
+            return None
+
+        facts: Dict[str, str] = {}
+        for heading in soup.select(".msc-flow-tracking__details-heading"):
+            value_el = heading.find_next_sibling(class_="msc-flow-tracking__details-value")
+            if value_el is None:
+                continue
+            key = re.sub(r"[\s:*]+$", "", self._clean(heading.get_text())).lower()
+            facts[key] = self._clean(value_el.get_text())
+
+        container_bar: Dict[str, str] = {}
+        for block in soup.select(".msc-flow-tracking__data"):
+            head_el = block.select_one(".data-heading")
+            val_el = block.select_one(".data-value")
+            if head_el is None or val_el is None:
+                continue
+            key = self._clean(head_el.get_text()).lower()
+            value = self._clean(val_el.get_text())
+            if value:
+                container_bar.setdefault(key, value)
+
+        events: List[Dict[str, Any]] = []
+        seen: Set[Tuple[Optional[str], Optional[str], Optional[str]]] = set()
+        for step in soup.select(".msc-flow-tracking__step"):
+            classes = " ".join(step.get("class") or [])
+            if "msc-flow-tracking__step--intermediate" in classes:
+                continue
+            date_el = step.select_one(".msc-flow-tracking__cell--two .data-value")
+            loc_el = step.select_one(".msc-flow-tracking__cell--three .data-value")
+            desc_el = step.select_one(".msc-flow-tracking__cell--four .data-value")
+            timestamp = self._parse_msc_date(date_el.get_text() if date_el else "")
+            # Rows without a rendered date are unhydrated templates - skip.
+            if not timestamp:
+                continue
+            location = self._clean(loc_el.get_text()) if loc_el else ""
+            description = self._clean(desc_el.get_text()) if desc_el else ""
+            signature = (timestamp, description, location)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            events.append(
+                {
+                    "timestamp": timestamp,
+                    "status": description or None,
+                    "description": description or None,
+                    "location": location,
+                    "source": "carrier",
+                }
+            )
+        # DOM lists newest-first; emit chronological ascending order.
+        events.sort(key=lambda ev: ev["timestamp"] or "")
+
+        container_number = (
+            facts.get("container number")
+            or container_bar.get("container")
+            or None
+        )
+        if not container_number and not events:
+            return None
+
+        origin_port = facts.get("port of load") or facts.get("shipped from") or None
+        destination_port = (
+            facts.get("port of discharge") or facts.get("shipped to") or None
+        )
+        # The container bar's "Latest Move" is the most recent activity;
+        # prefer the newest timeline event description when present.
+        status = (events[-1].get("description") if events else None) or container_bar.get("latest move")
+
+        return {
+            "container_number": container_number,
+            "tracking_number": container_number,
+            "shipping_line": self.carrier_id,
+            "bill_of_lading_number": facts.get("bill of lading") or None,
+            "status": status,
+            "origin_port": origin_port,
+            "destination_port": destination_port,
+            "estimated_arrival": self._parse_msc_date(facts.get("pod eta")),
+            "events": events,
         }
 
 

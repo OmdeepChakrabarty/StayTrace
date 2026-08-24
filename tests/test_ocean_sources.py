@@ -157,3 +157,121 @@ def test_cma_cgm_parse_official_response_returns_none_for_shell_page():
 def test_ready_to_be_loaded_normalizes_to_gate_in():
     from pipeline.normalize import normalize_ocean_status
     assert normalize_ocean_status("Ready to be loaded") == "gate_in"
+
+
+# ---------------------------------------------------------------------------
+# MSC browser-plan and structured parsing of the rendered results page
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+MSC_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "ocean"
+
+
+def test_msc_browser_plan_drives_official_search_form():
+    """
+    msc.com's SPA ignores a plain ?trackingNumber= query (its init() only
+    auto-searches from a base64-encoded 'params' query, which robots.txt
+    disallows), so the plan must drive the official search form in-session.
+    """
+    adapter = default_ocean_registry.get_adapter("msc")
+    plan = adapter.get_browser_plan("MSCU5285725")
+
+    # Plain start URL: no query string at all.
+    assert plan["start_url"] == "https://www.msc.com/en/track-a-shipment"
+    # Form interaction targets observed in the real page DOM.
+    assert plan["ready_selector"] == "#trackingNumber"
+    assert plan["fill"] == {"selector": "#trackingNumber", "value": "MSCU5285725"}
+    assert plan["submit"] == ".msc-flow-tracking .msc-search-autocomplete__search"
+    # Success strictly requires the searched reference in rendered text.
+    assert "MSCU5285725" in plan["success_js"]
+    assert "innerText" in plan["success_js"]
+    # Bounds sized from live session measurements; positive and bounded.
+    assert 0 < plan["max_page_wait"] <= plan["overall_timeout"]
+
+
+def test_msc_parse_official_response_maps_hydrated_results():
+    html = (MSC_FIXTURES_DIR / "msc_tracking.html").read_text(encoding="utf-8")
+    adapter = default_ocean_registry.get_adapter("msc")
+    parsed = adapter.parse_official_response(html)
+    assert parsed is not None
+
+    assert parsed["container_number"] == "MSCU5285725"
+    assert parsed["tracking_number"] == "MSCU5285725"
+    assert parsed["shipping_line"] == "msc"
+    assert parsed["bill_of_lading_number"] == "MEDUJS999038"
+    # Ports come from the official Port of Load / Port of Discharge facts,
+    # with whitespace runs collapsed ("Chattogram,  BD" as rendered).
+    assert parsed["origin_port"] == "Chattogram, BD"
+    assert parsed["destination_port"] == "Veracruz, MX"
+
+    # Status is the newest timeline event description.
+    assert parsed["status"] == "Empty received at CY"
+
+    # Events: hydrated rows only, chronological ascending, dd/MM/yyyy
+    # converted deterministically to ISO 8601 UTC (never month-first).
+    events = parsed["events"]
+    assert len(events) == 7  # template row without a date must be skipped
+    assert [e["timestamp"] for e in events] == [
+        "2026-05-20T00:00:00Z",
+        "2026-05-31T00:00:00Z",
+        "2026-06-06T00:00:00Z",
+        "2026-06-08T00:00:00Z",
+        "2026-07-24T00:00:00Z",
+        "2026-07-28T00:00:00Z",
+        "2026-07-30T00:00:00Z",
+    ]
+    assert events[0]["description"] == "Empty to Shipper"
+    assert events[0]["location"] == "Chattogram, BD"
+    assert events[-1]["description"] == "Empty received at CY"
+    assert events[-1]["location"] == "Veracruz, MX"
+    assert events[3]["location"] == "Colombo, LK"
+
+
+def test_msc_parse_official_response_returns_none_without_results():
+    adapter = default_ocean_registry.get_adapter("msc")
+    # Application shell (no rendered result block): fall back safely.
+    shell = (
+        '<html><body><div class="msc-flow-tracking" '
+        'data-api-url="/api/feature/tools/TrackingInfo"></div></body></html>'
+    )
+    assert adapter.parse_official_response(shell) is None
+    # Real carrier not-found rendering observed on msc.com: an error block
+    # with no .msc-flow-tracking__result - never fabricate data from it.
+    not_found = (
+        '<html><body><template x-if="!isSuccess">'
+        '<div class="msc-flow-tracking__error">'
+        '<span class="msc-icon-dry-container-logo-empty"></span>'
+        "<p x-text=\"errorMessage\">No results found for this Container "
+        "number. Please recheck that the number is complete and correct and "
+        "in the Container number format.</p>"
+        "</div></template></body></html>"
+    )
+    assert adapter.parse_official_response(not_found) is None
+    assert adapter.parse_official_response("") is None
+
+
+def test_msc_parsed_fixture_normalizes_to_canonical_schema():
+    from pipeline.normalize import normalize_container_shipment
+
+    html = (MSC_FIXTURES_DIR / "msc_tracking.html").read_text(encoding="utf-8")
+    adapter = MSCOceanAdapter()
+    parsed = adapter.parse_official_response(html)
+    normalized = normalize_container_shipment(parsed)
+
+    assert normalized["container_number"] == "MSCU5285725"
+    assert normalized["shipping_line"] == "msc"
+    # Country-suffixed port names carry through canonicalization unchanged
+    # (no 5-letter UN/LOCODE is present in MSC's rendered values).
+    assert normalized["origin_port"] == "Chattogram, BD"
+    assert normalized["destination_port"] == "Veracruz, MX"
+    assert normalized["estimated_arrival"] is None  # POD ETA absent on page
+    assert len(normalized["events"]) == 7
+    first = normalized["events"][0]
+    assert first["timestamp"] == "2026-05-20T00:00:00Z"
+    # Carrier descriptions normalize through the shared ocean status map.
+    assert normalized["events"][1]["status"] == "loaded"  # Export Loaded on Vessel
+    assert normalized["events"][2]["status"] == "discharged"  # Full Transshipment Discharged
+    assert normalized["events"][3]["status"] == "transshipment"  # Full Transshipment Loaded
+    assert normalized["events"][4]["status"] == "discharged"  # Import Discharged from Vessel
+    assert first["source"] == "carrier"
