@@ -275,3 +275,143 @@ def test_msc_parsed_fixture_normalizes_to_canonical_schema():
     assert normalized["events"][3]["status"] == "transshipment"  # Full Transshipment Loaded
     assert normalized["events"][4]["status"] == "discharged"  # Import Discharged from Vessel
     assert first["source"] == "carrier"
+
+
+# ---------------------------------------------------------------------------
+# Maersk browser-plan and structured parsing of the rendered results page
+# ---------------------------------------------------------------------------
+
+MAERSK_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "ocean"
+
+
+def test_maersk_browser_plan_drives_official_search_form():
+    """
+    maersk.com robots.txt allows exactly 'Allow: /tracking/$' and disallows
+    every deep link ('Disallow: /tracking/*'), so the plan must load the bare
+    search page and drive the official form in-session; direct navigation to
+    /tracking/<REF> is refused by the Scraping Browser.
+    """
+    adapter = default_ocean_registry.get_adapter("maersk")
+    plan = adapter.get_browser_plan("MRKU6357473")
+
+    # Bare robots-allowed search page: no reference in the start URL.
+    assert plan["start_url"] == "https://www.maersk.com/tracking/"
+    # Official search form targets observed in the real page DOM: the visible
+    # mc-input host is the ready marker, its light-DOM <input> child is what a
+    # native value setter can fill, and the mc-button host submits.
+    assert plan["ready_selector"] == "#track-input"
+    assert plan["fill"] == {"selector": "#track-input input", "value": "MRKU6357473"}
+    assert plan["submit"] == 'mc-button[data-test="track-button"]'
+    # Success strictly requires the searched reference in rendered text -
+    # input values, <title>, and analytics URLs never appear there, so shells
+    # and not-found pages never pass.
+    assert "MRKU6357473" in plan["success_js"]
+    assert "innerText" in plan["success_js"]
+    # Bounds sized from live session measurements (load 4-41s, results <=10s
+    # after submit); positive, bounded by the SPA-fallback service guardrail,
+    # and consistent with fetch_rendered_html's internal windows.
+    assert 0 < plan["max_page_wait"] <= plan["overall_timeout"] <= 120.0
+
+
+def test_maersk_parse_official_response_maps_hydrated_results():
+    html = (MAERSK_FIXTURES_DIR / "maersk_tracking.html").read_text(encoding="utf-8")
+    adapter = default_ocean_registry.get_adapter("maersk")
+    parsed = adapter.parse_official_response(html)
+    assert parsed is not None
+
+    assert parsed["container_number"] == "MRKU6357473"
+    assert parsed["tracking_number"] == "MRKU6357473"
+    assert parsed["shipping_line"] == "maersk"
+    # Ports come from the official From / To summary facts.
+    assert parsed["origin_port"] == "ROSARIO"
+    assert parsed["destination_port"] == "LE HAVRE"
+
+    # Status is the newest timeline event description (raw carrier wording).
+    assert parsed["status"] == "Empty container return"
+
+    # Vessel/voyage come from the most recent vessel-bearing milestone.
+    assert parsed["vessel_name"] == "KASSIAKOS"
+    assert parsed["voyage_number"] == "619N"
+
+    # No ETA trigger value rendered for this delivered container.
+    assert parsed["estimated_arrival"] is None
+
+    # Events: hydrated rows only, chronological ascending, 'DD Mon YYYY HH:MM'
+    # converted deterministically to ISO 8601 UTC (never month-first).
+    events = parsed["events"]
+    assert len(events) == 16
+    assert [e["timestamp"] for e in events] == [
+        "2026-03-13T17:20:00Z",
+        "2026-03-20T12:53:00Z",
+        "2026-03-30T21:36:00Z",
+        "2026-03-31T10:30:00Z",
+        "2026-04-05T16:17:00Z",
+        "2026-04-05T21:12:00Z",
+        "2026-04-14T13:20:00Z",
+        "2026-04-15T08:50:00Z",
+        "2026-05-06T11:35:00Z",
+        "2026-05-06T20:49:00Z",
+        "2026-05-16T04:35:00Z",
+        "2026-05-16T19:20:00Z",
+        "2026-05-20T07:13:00Z",
+        "2026-05-21T04:28:00Z",
+        "2026-05-21T14:45:00Z",
+        "2026-05-26T07:52:00Z",
+    ]
+    assert events[0]["description"] == "Gate out Empty"
+    assert events[0]["location"] == "ROSARIO ROSARIO PORT TERMINAL"
+    assert events[3]["description"] == "Feeder departure (MAERSK VENEZIA / 614N)"
+    assert events[3]["vessel"] == "MAERSK VENEZIA"
+    assert events[3]["voyage"] == "614N"
+    assert events[4]["location"] == "ITAPOA ITAPOA TERMINAIS PORTUARIOS SA"
+    assert events[-1]["description"] == "Empty container return"
+    assert events[-1]["location"] == ""
+    assert events[12]["location"] == "LE HAVRE HAVRE LE CNM TERMINAL"
+    assert all(e["source"] == "carrier" for e in events)
+
+
+def test_maersk_parse_official_response_returns_none_without_results():
+    adapter = default_ocean_registry.get_adapter("maersk")
+    # Application shell (search form only, no hydrated results): fall back safely.
+    shell = (
+        '<html><body><div id="maersk-app" data-v-app="">'
+        '<mc-input data-test="track-input" id="track-input" name="track-input">'
+        '<input type="text" name="track-input"></mc-input>'
+        '<mc-button data-test="track-button"></mc-button></div></body></html>'
+    )
+    assert adapter.parse_official_response(shell) is None
+    # Real carrier not-found rendering observed on maersk.com after searching
+    # an unknown reference - no summary block and no transport-plan items:
+    # never fabricate data from it.
+    not_found = (
+        "<html><body><main data-test=\"track-content\">"
+        "<div class=\"track-grid__content\">No results found</div>"
+        "<p>We couldn't find any Bills of Lading or containers available on "
+        "public track for your search.</p></main></body></html>"
+    )
+    assert adapter.parse_official_response(not_found) is None
+    assert adapter.parse_official_response("") is None
+
+
+def test_maersk_parsed_fixture_normalizes_to_canonical_schema():
+    from pipeline.normalize import normalize_container_shipment
+
+    html = (MAERSK_FIXTURES_DIR / "maersk_tracking.html").read_text(encoding="utf-8")
+    adapter = default_ocean_registry.get_adapter("maersk")
+    parsed = adapter.parse_official_response(html)
+    normalized = normalize_container_shipment(parsed)
+
+    assert normalized["container_number"] == "MRKU6357473"
+    assert normalized["shipping_line"] == "maersk"
+    assert normalized["origin_port"] == "ROSARIO"
+    assert normalized["destination_port"] == "LE HAVRE"
+    assert len(normalized["events"]) == 16
+    first = normalized["events"][0]
+    assert first["timestamp"] == "2026-03-13T17:20:00Z"
+    # Carrier descriptions normalize through the shared ocean status map.
+    assert normalized["events"][0]["status"] == "delivered"  # Gate out Empty
+    assert normalized["events"][1]["status"] == "gate_in"  # Gate in
+    assert normalized["events"][7]["status"] == "in_transit"  # Vessel departure
+    assert normalized["events"][9]["status"] == "unknown"  # Discharge (VESSEL / VOY) suffix
+    assert normalized["events"][14]["status"] == "gate_out"  # Gate out for delivery
+    assert first["source"] == "carrier"

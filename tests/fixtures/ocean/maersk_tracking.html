@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Fixture: Maersk (maersk.com) tracking results page after driving the
+  official search form on https://www.maersk.com/tracking/ in a live
+  Scraping Browser session for container MRKU6357473
+  (ROSARIO -> LE HAVRE via ITAPOA / ALGECIRAS). Analytics scripts,
+  cookie-consent scaffolding, header/footer trimmed while preserving the
+  exact web-component tags, data-test attributes, milestone structure and
+  value formats ('DD Mon YYYY HH:MM' local-time dates, '(VESSEL / VOYAGE)'
+  suffixes) that MaerskOceanAdapter.parse_official_response() relies on.
+-->
+<head><title>MRKU6357473 | Shipment, Parcel &amp; Container Tracking | Maersk</title></head>
+<body>
+<div class="mds" id="main"><div id="maersk-app" data-v-app=""><div class="track track-grid p-page__section content-width">
+<header class="track-grid__header" data-test="track-header">
+  <h1 class="track__title mds-headline--medium" data-test="track-title">Shipment &amp; Container Tracking</h1>
+</header>
+<div class="track-grid__search">
+  <p data-test="track-intro">Select your booking type from <strong>Ocean, Air, Less-than-container-load (LCL) or Parcel</strong> and enter your tracking number to view full tracking details.</p>
+  <div class="track-search">
+    <mc-input-group class="track-search__group">
+      <mc-select-native class="track-search__dropdown" name="trackingType">
+        <input type="text" name="trackingType" style="display:none" aria-hidden="true" tabindex="-1" value="">
+        <mc-option fit="medium" type="button" orientation="vertical" visible="" value="ocean">Ocean cargo</mc-option>
+        <mc-option fit="medium" type="button" orientation="vertical" visible="" value="air">Air cargo</mc-option>
+      </mc-select-native>
+      <mc-input class="track-search__input has-value" data-test="track-input" clearbutton id="track-input" name="track-input" value="MRKU6357473"><input type="text" name="track-input" style="display:none" aria-hidden="true" tabindex="-1" value="MRKU6357473"></mc-input>
+    </mc-input-group>
+    <mc-button class="track-search__button" data-test="track-button" fit="medium" appearance="primary" variant="filled" width="fit-content"></mc-button>
+  </div>
+  <p class="track-search__hint" data-test="ocean-help-text"><span>Bill of Lading number consists of 9 characters.<br>Container number is made of 4 letters and 7 digits.</span></p>
+</div>
+<main class="track-grid__content" data-test="track-content">
+  <mc-notification class="ocean-soft-launch-banner" data-test="ocean-soft-launch-banner">
+    <section class="ocean-soft-launch-banner__content">
+      <p class="ocean-soft-launch-banner__headline" data-test="ocean-soft-launch-banner-headline">COMING SOON! We are improving your tracking experience.</p>
+    </section>
+    <div slot="actions"><mc-button data-test="ocean-soft-launch-enter-button" fit="medium" appearance="primary" variant="filled" width="auto">Try new Tracking experience</mc-button></div>
+  </mc-notification>
+  <div class="search-summary-ocean track-grid__summary" data-test="search-summary-ocean">
+    <mc-icon class="search-summary-ocean__icon icon" data-test="trackSearchIcon" icon="container"></mc-icon>
+    <dl class="search-summary-ocean__list">
+      <div><dt class="mds-text--medium-bold" data-test="transport-doc-number">Container</dt><dd class="search-summary-ocean__detail" data-test="transport-doc-value">MRKU6357473</dd></div>
+      <div class="search-summary-ocean__locations">
+        <div><dt class="mds-text--medium-bold" data-test="track-from-label">From</dt><dd class="search-summary-ocean__detail" data-test="track-from-value">ROSARIO</dd></div>
+        <div><dt class="mds-text--medium-bold" data-test="track-to-label">To</dt><dd class="search-summary-ocean__detail" data-test="track-to-value">LE HAVRE</dd></div>
+      </div>
+    </dl>
+  </div>
+  <div>
+    <div class="container container--ocean" data-test="container">
+      <header class="container__header" data-test="container-header-MRKU6357473">
+        <mc-text-and-icon data-test="container-details" fit="medium"><span class="mds-text--medium-bold">MRKU6357473</span><span class="container__separator">|</span><span>40' Dry High</span></mc-text-and-icon>
+        <mc-text-and-icon fit="medium"><span data-test="last-updated">Last updated: 2 months ago</span></mc-text-and-icon>
+      </header>
+      <div class="container__wrapper" data-test="container-info">
+        <mc-tooltip><span>HAVRE LE CNM TERMINAL</span><mc-text-and-icon slot="trigger" class="container__text-icon" data-test="container-eta" fit="medium"></mc-text-and-icon></mc-tooltip>
+        <mc-text-and-icon class="container__text-icon" data-test="container-location" fit="medium"><span slot="sublabel">Empty container return &#8226; LE HAVRE, FRANCE &#8226; <span class="nowrap">26 May 2026</span></span></mc-text-and-icon>
+      </div>
+      <div id="transport-plan__container__0" class="transport-plan transport-plan--ocean" data-test="transport-plan">
+        <p class="note">Note: All times are given in local time, unless otherwise stated.</p>
+        <ul data-test="transport-plan-list" class="transport-plan__list">
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <div class="location" data-test="location-name"><strong>ROSARIO</strong><br>ROSARIO PORT TERMINAL</div>
+            <mc-icon class="icon" data-test="icon" icon="arrow-to-right"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Gate out Empty</span><br><span data-test="milestone-date">13 Mar 2026 17:20</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="arrow-from-left"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Gate in</span><br><span data-test="milestone-date">20 Mar 2026 12:53</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Load on MAERSK VENEZIA / 614N</span><br><span data-test="milestone-date">30 Mar 2026 21:36</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Feeder departure</span> (MAERSK VENEZIA / 614N) </span><br><span data-test="milestone-date">31 Mar 2026 10:30</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <div class="location" data-test="location-name"><strong>ITAPOA</strong><br>ITAPOA TERMINAIS PORTUARIOS SA</div>
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Feeder arrival</span> (MAERSK VENEZIA / 614N) </span><br><span data-test="milestone-date">05 Apr 2026 16:17</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Discharge</span> (MAERSK VENEZIA / 614N) </span><br><span data-test="milestone-date">05 Apr 2026 21:12</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Load on MAERSK LAMANAI / 616N</span><br><span data-test="milestone-date">14 Apr 2026 13:20</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Vessel departure</span> (MAERSK LAMANAI / 616N) </span><br><span data-test="milestone-date">15 Apr 2026 08:50</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <div class="location" data-test="location-name"><strong>ALGECIRAS</strong><br>ALGECIRAS - ML TERMINAL</div>
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Vessel arrival</span> (MAERSK LAMANAI / 616N) </span><br><span data-test="milestone-date">06 May 2026 11:35</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Discharge</span> (MAERSK LAMANAI / 616N) </span><br><span data-test="milestone-date">06 May 2026 20:49</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Load on KASSIAKOS / 619N</span><br><span data-test="milestone-date">16 May 2026 04:35</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Vessel departure</span> (KASSIAKOS / 619N) </span><br><span data-test="milestone-date">16 May 2026 19:20</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <div class="location" data-test="location-name"><strong>LE HAVRE</strong><br>HAVRE LE CNM TERMINAL</div>
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Vessel arrival</span> (KASSIAKOS / 619N) </span><br><span data-test="milestone-date">20 May 2026 07:13</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="vessel-front"></mc-icon>
+            <div class="milestone" data-test="milestone"><span><span>Discharge</span> (KASSIAKOS / 619N) </span><br><span data-test="milestone-date">21 May 2026 04:28</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="arrow-from-left"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Gate out for delivery</span><br><span data-test="milestone-date">21 May 2026 14:45</span></div>
+          </li>
+          <li data-test="transport-plan-item-complete" class="transport-plan__list__item">
+            <mc-icon class="icon" data-test="icon" icon="arrow-to-right"></mc-icon>
+            <div class="milestone" data-test="milestone"><span>Empty container return</span><br><span data-test="milestone-date">26 May 2026 07:52</span></div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</main>
+</div></div></div>
+</body>
+</html>

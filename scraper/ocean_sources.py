@@ -262,12 +262,32 @@ class MSCOceanAdapter(OceanSourceAdapter):
 
 
 class MaerskOceanAdapter(OceanSourceAdapter):
-    """Maersk Line official tracking adapter."""
+    """
+    Maersk Line official tracking adapter.
+
+    maersk.com/tracking is a Vue single-page app built on Lit web components
+    (mc-input / mc-button). Results exist ONLY as client-side rendered DOM -
+    there is no embedded JSON blob and no server-rendered tracking state.
+    robots.txt allows exactly 'Allow: /tracking/$' while 'Disallow:
+    /tracking/*' forbids every deep link (/tracking/<REF>), so direct
+    navigation to a reference URL is refused by Bright Data and stateless
+    Web Unlocker fetches are rejected outright. Tracking can therefore only
+    be produced by loading the allowed bare search page and driving the
+    official search form within one browser session; the SPA then routes
+    client-side to /tracking/<REF> and hydrates the results.
+    """
+    # Maersk renders milestone dates as local port times in 'DD Mon YYYY
+    # HH:MM' format (the page states: "All times are given in local time");
+    # converted explicitly to ISO 8601 UTC during parsing so day/month can
+    # never be swapped heuristically.
+    _DATE_FORMATS = ("%d %b %Y %H:%M", "%d %b %Y")
+
     carrier_id = "maersk"
     display_name = "Maersk Line"
     supported_prefixes = ("MAEU", "MSKU", "MRKU", "PONU")
-    # maersk.com/tracking is an anti-bot protected React application; stateless
-    # fetches return a challenge/shell page. Escalate to a real browser session.
+    # A stateless fetch returns an error string (robots/KYC refusal) or the
+    # application shell without tracking state, so extraction escalates to a
+    # real browser session that drives the official search form.
     browser_fallback = True
 
     def build_tracking_url(self, container_number: str) -> str:
@@ -277,12 +297,169 @@ class MaerskOceanAdapter(OceanSourceAdapter):
     def get_browser_plan(self, container_number: str) -> Dict[str, Any]:
         clean = re.sub(r"\s+", "", container_number.strip().upper())
         return {
-            "start_url": self.build_tracking_url(clean),
-            # The tracking route renders the shipment timeline client-side for
-            # the requested reference; no form interaction is required.
+            # Bare search page only - the ONLY robots-allowed tracking route
+            # ('Allow: /tracking/$'); deep links match 'Disallow: /tracking/*'
+            # and are refused by the Scraping Browser.
+            "start_url": "https://www.maersk.com/tracking/",
+            # Official search form (Lit web components): ready/fill target
+            # differ deliberately. The visible form control is the mc-input
+            # HOST (#track-input); its light-DOM <input> child is the real
+            # HTMLInputElement the native value setter can fill, after which
+            # the component syncs host/shadow state and the Vue app sees it.
+            "ready_selector": "#track-input",
+            "fill": {"selector": "#track-input input", "value": clean},
+            "submit": 'mc-button[data-test="track-button"]',
+            # Success strictly requires the searched reference in rendered
+            # text: input values, <title>, and analytics URLs never appear in
+            # body.innerText, so shells and not-found pages never pass.
             "success_js": _rendered_reference_success_js(clean),
-            "max_page_wait": 45.0,
-            "overall_timeout": 90.0,
+            # Measured on live Scraping Browser sessions: page load fires
+            # between ~4s and ~41s (slow third-party resources), while the
+            # hydrated result timeline renders within ~10s of submitting the
+            # official form. max_page_wait bounds both the post-load ready
+            # window and the post-submit result window; overall_timeout stays
+            # within the service's declared bound for SPA fallback plans,
+            # with fetch_carrier_page_via_browser's fresh-session retry
+            # covering occasional slow loads.
+            "max_page_wait": 60.0,
+            "overall_timeout": 120.0,
+        }
+
+    @staticmethod
+    def _clean(text: Optional[str]) -> str:
+        """Collapse whitespace runs left by the web-component rendering."""
+        return re.sub(r"\s+", " ", text or "").strip()
+
+    def _parse_maersk_date(self, raw: Optional[str]) -> Optional[str]:
+        """Convert Maersk's 'DD Mon YYYY [HH:MM]' rendering into ISO 8601 UTC."""
+        cleaned = self._clean(raw)
+        if not cleaned:
+            return None
+        for fmt in self._DATE_FORMATS:
+            try:
+                dt = datetime.strptime(cleaned, fmt)
+                return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                continue
+        return None
+
+    def parse_official_response(self, html: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse Maersk's rendered tracking page into the canonical raw container
+        schema. The SPA hydrates values as plain DOM marked with stable
+        data-test attributes:
+
+          [data-test="search-summary-ocean"]      shipment facts (doc/ports)
+          [data-test^="transport-plan-item"]      event timeline rows
+            [data-test="location-name"]           row port + terminal
+            [data-test="milestone"]               row description + date
+              [data-test="milestone-date"]        'DD Mon YYYY HH:MM'
+
+        Returns None when no rendered tracking results exist (application
+        shell, cookie wall, or the carrier's 'No results found' response) so
+        callers fail safely and never fabricate data.
+        """
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:  # pragma: no cover - bs4 is a hard repo dependency
+            return None
+
+        soup = BeautifulSoup(html or "", "html.parser")
+        doc_value = soup.select_one('[data-test="transport-doc-value"]')
+        items = soup.select('li[data-test^="transport-plan-item"]')
+        if doc_value is None and not items:
+            return None
+
+        container_number = self._clean(doc_value.get_text()) if doc_value else None
+        if not container_number:
+            header = soup.select_one("header[data-test^='container-header-']")
+            if header is not None:
+                candidate = self._clean(
+                    (header.get("data-test") or "").replace("container-header-", "")
+                )
+                container_number = candidate or None
+
+        origin_port = dest_port = None
+        summary = soup.select_one('[data-test="search-summary-ocean"]')
+        if summary is not None:
+            origin_el = summary.select_one('[data-test="track-from-value"]')
+            dest_el = summary.select_one('[data-test="track-to-value"]')
+            origin_port = self._clean(origin_el.get_text()) if origin_el else None
+            dest_port = self._clean(dest_el.get_text()) if dest_el else None
+
+        vessel_re = re.compile(r"\(([^()]+?)\s*/\s*([A-Za-z0-9]+)\)\s*$")
+
+        events: List[Dict[str, Any]] = []
+        seen: Set[Tuple[Optional[str], Optional[str], Optional[str]]] = set()
+        for item in items:
+            date_el = item.select_one('[data-test="milestone-date"]')
+            timestamp = self._parse_maersk_date(date_el.get_text() if date_el else "")
+            # Rows without a rendered date are unhydrated templates - skip.
+            if not timestamp:
+                continue
+            milestone = item.select_one('[data-test="milestone"]')
+            description = ""
+            if milestone is not None:
+                date_text = self._clean(date_el.get_text())
+                description = self._clean(
+                    self._clean(milestone.get_text()).replace(date_text, "")
+                )
+            location = ""
+            loc_el = item.select_one('[data-test="location-name"]')
+            if loc_el is not None:
+                # 'ROSARIO<br>ROSARIO PORT TERMINAL' renders as two strings;
+                # join them explicitly so the port and terminal stay separated.
+                location = self._clean(loc_el.get_text(" ", strip=True))
+
+            vessel = voyage = None
+            if description:
+                vm = vessel_re.search(description)
+                if vm:
+                    vessel, voyage = vm.group(1).strip(), vm.group(2)
+
+            signature = (timestamp, description, location)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            events.append(
+                {
+                    "timestamp": timestamp,
+                    "status": description or None,
+                    "description": description or None,
+                    "location": location,
+                    "vessel": vessel,
+                    "voyage": voyage,
+                    "source": "carrier",
+                }
+            )
+        # DOM lists oldest-first already; emit deterministic chronological order.
+        events.sort(key=lambda ev: ev["timestamp"] or "")
+
+        if not container_number and not events:
+            return None
+
+        latest_vessel_event = next(
+            (ev for ev in reversed(events) if ev.get("vessel")), None
+        )
+        # The newest timeline move is the current shipment status.
+        status = (events[-1].get("description") if events else None) or None
+
+        estimated_arrival = None
+        eta_el = soup.select_one('[data-test="container-eta"]')
+        if eta_el is not None:
+            estimated_arrival = self._parse_maersk_date(eta_el.get_text())
+
+        return {
+            "container_number": container_number,
+            "tracking_number": container_number,
+            "shipping_line": self.carrier_id,
+            "status": status,
+            "vessel_name": (latest_vessel_event or {}).get("vessel"),
+            "voyage_number": (latest_vessel_event or {}).get("voyage"),
+            "origin_port": origin_port,
+            "destination_port": dest_port,
+            "estimated_arrival": estimated_arrival,
+            "events": events,
         }
 
 
